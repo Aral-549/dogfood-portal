@@ -47,7 +47,7 @@ separate result ("People's choice"). Authorization goes through `core/authz`.
 | 16 | comment by visitor / empty / over 2000 chars | 401 / 422 / 422 | |
 | 17 | comment deleted by its author or an organizer | 204, audit `comment.delete`; by anyone else 403 | |
 | 18 | same user sends more than 10 votes+withdrawals or 5 comments in 60 s | 429 with `Retry-After` | per account, sliding window |
-| 19 | more than 5 failed logins for one email in 5 minutes | 429 for that email for the rest of the window | slows password guessing |
+| 19 | more than 5 failed logins for one email from one client IP in 5 minutes (or 20 for one email from any IPs, or 50 from one IP over any emails) | 429 for that email+IP (resp. email, IP) for the rest of the window; a successful login clears that email+IP's count | slows password guessing without letting a stranger lock the owner out (amended 2026-09-27) |
 | 20 | more than 3 registrations from one client IP in 1 hour | 4th and later accounts are created but flagged `abuse.flag` (`many_accounts_one_ip`) | flag, never block: shared IPs (campus NAT) are normal |
 | 21 | registration whose normalized email equals an existing one (lowercase; for gmail.com/googlemail.com: dots removed and `+tag` stripped) | account created, flagged `abuse.flag` (`duplicate_email`) | `a.b+x@gmail.com` ~ `ab@gmail.com` |
 | 22 | organizer dashboard | lists abuse flags with the accounts involved; organizer can void a flagged account's votes (audited `vote.void`, reversible) | voided votes do not count in case 11 |
@@ -55,7 +55,9 @@ separate result ("People's choice"). Authorization goes through `core/authz`.
 ## Edge cases that must be covered
 - Window not configured: `/vote` explains voting is not open; no 500.
 - `voting_close` before `voting_open`: 422 when the organizer saves it.
-- Rate-limit state is in memory: a restart clears it (documented), limits never apply to the acceptance checker's 7 requests.
+- Rate-limit state is in memory: a restart clears it (documented), limits never apply to the acceptance checker's 7 requests. Expired keys are swept, so memory stays bounded. `DOGFOOD_RATE_LIMITS=off` disables limits for load tests (flags stay on).
+- Votes by someone who later becomes a judge of the event stop counting.
+- Moving `voting_close` re-arms the `voting.closed` webhook.
 - Deleting a project's team member does not delete their votes (audit trail).
 
 ## Explicitly out of scope
@@ -66,5 +68,5 @@ separate result ("People's choice"). Authorization goes through `core/authz`.
 ## Status
 - [x] Drafted
 - [x] Reviewed by a human (approved 2026-09-27)
-- [x] Implementation matches this contract (case 19 makes two frozen BUG-27 tests in test_regressions_4.py fail; awaiting a human decision)
+- [x] Implementation matches this contract
 - [x] Golden tests exist for every behavior case above

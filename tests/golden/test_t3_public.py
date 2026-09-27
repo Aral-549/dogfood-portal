@@ -15,11 +15,12 @@ the demo judge is jdg_24. 41 project rows - 1 superseded = 40 ballot entries.
 import hashlib
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from conftest import EVENT_ID, JUDGE_A, ORGANIZER, PARTICIPANT, load_fixture_json, portal
+from conftest import EVENT_ID, FIXTURES_PATH, JUDGE_A, ORGANIZER, PARTICIPANT, env, load_fixture_json, portal
 from dogfood.core import authz
 from dogfood.core.authz import Actor, Decision
 from dogfood.core.public import ballot_order, normalize_email, tally, voting_state
@@ -345,3 +346,121 @@ def test_edge_close_before_open_is_422(tmp_path):
         assert r.status_code == 422
         r = c.post("/api/v1/event", json={"voting_open": "2026-05-01T00:00:00Z"}, headers=ORGANIZER)
         assert r.status_code == 422                                        # both or neither
+
+
+# --- improvements beyond the contract (2026-09-27) ---------------------------------------------
+# Failed logins are throttled per (email, IP) at 5, per email at 20 and per IP at 50, so an attacker
+# cannot lock an account's owner out from elsewhere. The client IP is set by a test-only ASGI wrapper
+# (X-Test-IP header -> scope["client"]); the app itself is untouched.
+@contextmanager
+def ip_portal(data_dir):
+    from fastapi.testclient import TestClient
+    from dogfood.app import app
+
+    async def wrapped(scope, receive, send):
+        if scope["type"] == "http":
+            ip = dict(scope["headers"]).get(b"x-test-ip")
+            if ip:
+                scope = {**scope, "client": (ip.decode(), 50000)}
+        await app(scope, receive, send)
+
+    with env(DOGFOOD_DATA=str(data_dir), DOGFOOD_FIXTURES=str(FIXTURES_PATH), DOGFOOD_DEMO_SESSIONS="1"):
+        with TestClient(wrapped, follow_redirects=False, raise_server_exceptions=False) as client:
+            yield client
+
+
+def _login(c, ip, email, password):
+    return c.post("/login", data={"email": email, "password": password}, headers={"X-Test-IP": ip}).status_code
+
+
+def test_lockout_from_one_ip_does_not_lock_out_the_owner(tmp_path):
+    with ip_portal(tmp_path) as c:
+        _new_user(c, "victim@example.org")
+        assert [_login(c, "6.6.6.6", "victim@example.org", "guess") for _ in range(6)] == [401] * 5 + [429]
+        assert _login(c, "10.0.0.1", "victim@example.org", "a-long-password") == 303
+
+
+def test_per_email_ceiling_across_many_ips(tmp_path):
+    with ip_portal(tmp_path) as c:
+        _new_user(c, "target@example.org")
+        codes = [_login(c, f"7.7.{i}.1", "target@example.org", "guess") for i in range(21)]
+        assert codes == [401] * 20 + [429]
+        assert _login(c, "10.0.0.1", "target@example.org", "a-long-password") == 429
+
+
+def test_per_ip_ceiling_against_password_spraying(tmp_path):
+    with ip_portal(tmp_path) as c:
+        codes = [_login(c, "8.8.8.8", f"nobody{i}@example.org", "Summer2026!") for i in range(51)]
+        assert codes == [401] * 50 + [429]
+        assert _login(c, "9.9.9.9", "nobody0@example.org", "x") == 401          # other IPs unaffected
+
+
+def test_success_forgives_own_typos(tmp_path):
+    with ip_portal(tmp_path) as c:
+        _new_user(c, "typo@example.org")
+        for _ in range(3):
+            assert [_login(c, "1.1.1.1", "typo@example.org", "oops") for _ in range(4)] == [401] * 4
+            assert _login(c, "1.1.1.1", "typo@example.org", "a-long-password") == 303
+
+
+def test_browser_gets_a_page_on_429(tmp_path):
+    with portal(tmp_path) as c:
+        _new_user(c, "html@example.org")
+        for _ in range(5):
+            c.post("/login", data={"email": "html@example.org", "password": "no"})
+        r = c.post("/login", data={"email": "html@example.org", "password": "no"}, headers={"Accept": "text/html"})
+        assert r.status_code == 429 and "text/html" in r.headers["content-type"] and "Retry-After" in r.headers
+
+
+def test_rate_limits_off_switch():
+    from dogfood.app import rate_limits
+    off = rate_limits("off")
+    assert all(off["login_fail"].hit("k", 0)[0] for _ in range(1000))
+    assert off["register_ip"].enabled                     # flags are never switched off
+    assert rate_limits("on")["login_fail"].enabled
+
+
+def test_limiter_forgets_expired_keys():
+    w = SlidingWindow(1, 10)
+    for i in range(5000):
+        w.hit(f"random{i}@example.org", float(i))
+    assert len(w) < 1100                                    # swept, not 5000
+
+
+def test_new_judge_votes_stop_counting(tmp_path):
+    with portal(tmp_path) as c:
+        _window(c, OPEN)
+        voter = _new_user(c, "late.judge@example.org")
+        assert _vote(c, voter, "prj_02").status_code == 201
+        assert c.post("/api/v1/judges", json={"email": "late.judge@example.org"}, headers=ORGANIZER).status_code == 303
+        _window(c, CLOSED)
+        assert c.get("/api/v1/votes/results").json() == []
+
+
+def test_moved_close_resets_voting_closed_webhook(tmp_path):
+    with portal(tmp_path) as c:
+        _window(c, CLOSED)
+    conn = sqlite3.connect(str(tmp_path / "dogfood.db"))
+    conn.execute("UPDATE events SET voting_closed_sent = 1")
+    conn.commit()
+    conn.close()
+    with portal(tmp_path) as c:
+        _window(c, OPEN)                                      # extended into the future
+        _window(c, OPEN)                                      # unchanged close: no reset needed
+    conn = sqlite3.connect(str(tmp_path / "dogfood.db"))
+    assert conn.execute("SELECT voting_closed_sent FROM events WHERE id = ?", (EVENT_ID,)).fetchone()[0] == 0
+    conn.close()
+
+
+def test_duplicate_email_uses_indexed_column(tmp_path):
+    with portal(tmp_path) as c:
+        _new_user(c, "first.last@gmail.com")
+        _new_user(c, "firstlast+hack@googlemail.com")
+    conn = sqlite3.connect(str(tmp_path / "dogfood.db"))
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM users WHERE email_norm IS NULL").fetchone()[0] == 0
+        plan = " ".join(r[-1] for r in conn.execute(
+            "EXPLAIN QUERY PLAN SELECT id FROM users WHERE email_norm = 'x' AND id != 'y'"))
+        assert "idx_users_email_norm" in plan
+    finally:
+        conn.close()

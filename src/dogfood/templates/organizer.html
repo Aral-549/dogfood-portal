@@ -114,7 +114,11 @@
 <section class="card">
   <h2>Community vote</h2>
   <p>Voting is <strong>{{ voting.state }}</strong>. {{ voting.total }} vote{{ "" if voting.total == 1 else "s" }} cast.
+    {% if voting.voters %}From {{ voting.voters }} voter{{ "" if voting.voters == 1 else "s" }}.{% endif %}
     {% if voting.state != "closed" %}Per-project tallies stay hidden from everyone, organizers included, until voting closes.{% endif %}</p>
+  {% if voting.results %}<h3>People's choice (top {{ voting.results|length }})</h3>
+  <ol>{% for r in voting.results %}<li>{{ meta[r.project].title if r.project in meta else r.project }}: {{ r.votes }}</li>{% endfor %}</ol>
+  <p class="muted">Excludes voided voters and judges. Full list: <a href="/api/v1/votes/results?event={{ event.id }}">JSON</a>.</p>{% endif %}
   <h3>Abuse flags</h3>
   <div class="table-wrap"><table>
     <tr><th>When</th><th>Account</th><th>Flag</th><th>Detail</th><th>Votes</th></tr>

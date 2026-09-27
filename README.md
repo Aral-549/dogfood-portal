@@ -85,6 +85,10 @@ page. Logged-in users vote at `/vote`; ballots are in a random order unique to
 each voter; nobody sees tallies (organizers included) until the window
 closes. Comments on project pages. Rate limits, duplicate-account flags and a
 full audit trail; the organizer can void a flagged account's votes.
+Failed logins are throttled per email and client IP, so a stranger's guesses
+cannot lock the real owner out. Behind a reverse proxy, set
+`FORWARDED_ALLOW_IPS=<proxy ip>` so uvicorn sees real client IPs (otherwise every
+visitor looks like the proxy). `DOGFOOD_RATE_LIMITS=off` is for load tests only.
 
 **API.** Everything is under `/api/v1`, documented at `/openapi.json`. Create a
 personal token with `POST /api/v1/tokens` and send it as

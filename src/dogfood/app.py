@@ -22,7 +22,7 @@ from .core import authz, csvexport, importer, records, webhooks
 from .core.assignment import auto_assign
 from .core.confidence import tiebreak_assign
 from .core.public import ballot_order, normalize_email, tally, voting_state
-from .core.ratelimit import SlidingWindow
+from .core.ratelimit import SlidingWindow, Unlimited
 from .webhook_worker import Worker, enqueue
 from .core.authz import Actor, Decision
 from .core.deadline import submissions_open
@@ -34,6 +34,20 @@ UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
 MAX_WEIGHT = 1000.0
 
 
+def rate_limits(mode: str) -> dict:
+    """contracts/t3-public.md cases 18-20; in memory, cleared by a restart.
+
+    Failed logins are counted three ways (all over 5 minutes): per (email, client IP) at 5, so an
+    attacker locks only themselves out of that account, not its owner; per email at 20, against
+    guessing spread over many IPs; per client IP at 50, against spraying one password over many
+    accounts. `mode == "off"` disables the limits (load tests); registration flags always apply.
+    """
+    lim = Unlimited if mode.strip().lower() == "off" else SlidingWindow
+    return {"vote": lim(10, 60), "comment": lim(5, 60),
+            "login_fail": lim(5, 300), "login_fail_email": lim(20, 300), "login_fail_ip": lim(50, 300),
+            "register_ip": SlidingWindow(3, 3600)}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logs.setup(os.environ.get("DOGFOOD_LOG_LEVEL", "INFO"))
@@ -43,10 +57,7 @@ async def lifespan(app: FastAPI):
     app.state.db_path = boot.db_path()
     worker = Worker(app.state.db_path)
     worker.start()
-    app.state.limits = {  # contracts/t3-public.md cases 18-20; in memory, cleared by a restart
-        "vote": SlidingWindow(10, 60), "comment": SlidingWindow(5, 60),
-        "login_fail": SlidingWindow(5, 300), "register_ip": SlidingWindow(3, 3600),
-    }
+    app.state.limits = rate_limits(os.environ.get("DOGFOOD_RATE_LIMITS", "on"))
     yield
     worker.stop()
     conn.close()
@@ -265,15 +276,20 @@ async def login(request: Request):
     nxt = data.get("next") or "/me"
     nxt = nxt if isinstance(nxt, str) and nxt.startswith("/") and not nxt.startswith("//") else "/me"
     conn = conn_of(request)
-    fails = request.app.state.limits["login_fail"]
-    blocked, retry = fails.blocked(email, _mono())
-    if blocked:
-        return _too_many(request, retry, "too many failed logins for this email")
+    limits, ip = request.app.state.limits, _client_ip(request)
+    counters = ((limits["login_fail"], f"{email}|{ip}"), (limits["login_fail_email"], email),
+                (limits["login_fail_ip"], ip))
+    for window, key in counters:
+        blocked, retry = window.blocked(key, _mono())
+        if blocked:
+            return _too_many(request, retry, "too many failed logins; try again later")
     row = conn.execute("SELECT id, password_hash FROM users WHERE email = ?", (email,)).fetchone()
     if not await run_in_threadpool(svc.check_password, password, row["password_hash"] if row else None):
-        fails.hit(email, _mono())
+        for window, key in counters:
+            window.hit(key, _mono())
         logs.stage("auth", "login_failed", request_id=request.state.request_id)
         return render(request, "login.html", {"error": "Wrong email or password.", "next": nxt}, status=401)
+    limits["login_fail"].reset(f"{email}|{ip}")  # the owner is back; their own typos are forgiven
     token = svc.create_session(conn, row["id"])
     resp = RedirectResponse(nxt, status_code=303)
     resp.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=14 * 86400)
@@ -323,8 +339,14 @@ def _mono() -> float:
 
 def _too_many(request: Request, retry: float, reason: str):
     logs.stage("abuse", "rate_limited", request_id=request.state.request_id, path=request.url.path, reason=reason)
-    return JSONResponse({"error": "rate_limited", "detail": reason}, status_code=429,
-                        headers={"Retry-After": str(max(1, int(retry + 0.999)))})
+    headers = {"Retry-After": str(max(1, int(retry + 0.999)))}
+    if wants_json(request) or "text/html" not in request.headers.get("accept", ""):  # scripts get JSON
+        return JSONResponse({"error": "rate_limited", "detail": reason}, status_code=429, headers=headers)
+    resp = render(request, "message.html", {"title": "Slow down",
+                                            "message": f"{reason.capitalize()}. Try again in {headers['Retry-After']} s."},
+                  status=429)
+    resp.headers.update(headers)
+    return resp
 
 
 def _client_ip(request: Request) -> str:
@@ -334,8 +356,14 @@ def _client_ip(request: Request) -> str:
 def _registration_flags(request: Request, conn, uid: str, email: str) -> None:
     """Flag, never block: shared IPs (campus NAT) and plus-addresses are normal."""
     norm = normalize_email(email)
-    twins = [r["id"] for r in conn.execute("SELECT id, email FROM users WHERE id != ?", (uid,))
-             if normalize_email(r["email"]) == norm]
+    # Every writer of users (register, importer, invites, cli) leaves email_norm NULL; fill it here,
+    # so after the first registration this is an indexed lookup, not a scan of every account.
+    pending = conn.execute("SELECT id, email FROM users WHERE email_norm IS NULL").fetchall()
+    if pending:
+        with db.transaction(conn):
+            conn.executemany("UPDATE users SET email_norm = ? WHERE id = ?",
+                             [(normalize_email(r["email"]), r["id"]) for r in pending])
+    twins = [r["id"] for r in conn.execute("SELECT id FROM users WHERE email_norm = ? AND id != ?", (norm, uid))]
     ip = _client_ip(request)
     by_ip = request.app.state.limits["register_ip"]
     ip_ok, _ = by_ip.hit(ip, _mono())
@@ -708,7 +736,10 @@ def organizer_home(request: Request):
         "links": request.query_params.get("link"), "k": k, "confidence": a["confidence"],
         "is_checker_event": ev["id"] == svc.default_event_id(conn),
         "voting": {"state": _vstate(ev, request.state.now),
-                   "total": conn.execute("SELECT COUNT(*) FROM votes WHERE event_id = ?", (ev["id"],)).fetchone()[0]},
+                   "total": conn.execute("SELECT COUNT(*) FROM votes WHERE event_id = ?", (ev["id"],)).fetchone()[0],
+                   "voters": conn.execute("SELECT COUNT(DISTINCT user_id) FROM votes WHERE event_id = ?",
+                                          (ev["id"],)).fetchone()[0],
+                   "results": _vote_tally(conn, ev["id"])[:10] if _vstate(ev, request.state.now) == "closed" else []},
         "abuse": conn.execute("SELECT f.*, u.email FROM abuse_flags f JOIN users u ON u.id = f.user_id "
                               "ORDER BY f.id DESC LIMIT 100").fetchall(),
         "records_count": conn.execute("SELECT COUNT(*) FROM records WHERE event_id = ?", (ev["id"],)).fetchone()[0],
@@ -867,6 +898,9 @@ async def update_event(request: Request):
     with db.transaction(conn):
         for key, value in changes.items():
             conn.execute(f"UPDATE events SET {key} = ? WHERE id = ?", (value, ev["id"]))  # key from fixed tuple above
+        if "voting_close" in changes and changes["voting_close"] != ev["voting_close"]:
+            # A moved close is a new close: the worker sends voting.closed again when it passes.
+            conn.execute("UPDATE events SET voting_closed_sent = 0 WHERE id = ?", (ev["id"],))
         svc.audit(conn, actor_of(request), ev["id"], "event.update", ev["id"],
                   before={k: ev[k] for k in changes}, after=changes)
     return RedirectResponse(f"/organizer?event={ev['id']}", status_code=303)
@@ -1069,6 +1103,8 @@ def vote_page(request: Request):
 def _vote_tally(conn, event_id: str) -> list[dict]:
     votes = conn.execute("SELECT user_id, project_id FROM votes WHERE event_id = ?", (event_id,)).fetchall()
     voided = {r["user_id"] for r in conn.execute("SELECT user_id FROM voided_voters WHERE event_id = ?", (event_id,))}
+    # Judges do not vote (case 7). Someone who voted and was made a judge afterwards stops counting too.
+    voided |= {r["user_id"] for r in conn.execute("SELECT user_id FROM judges WHERE event_id = ?", (event_id,))}
     return tally(((v["user_id"], v["project_id"]) for v in votes), voided)
 
 

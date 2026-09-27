@@ -22,6 +22,7 @@ ADDED_COLUMNS = [
     ("events", "voting_close", "TEXT"),
     ("events", "votes_per_voter", "INTEGER NOT NULL DEFAULT 1 CHECK (votes_per_voter >= 1)"),
     ("events", "voting_closed_sent", "INTEGER NOT NULL DEFAULT 0"),
+    ("users", "email_norm", "TEXT"),  # core.public.normalize_email, filled lazily (see app._registration_flags)
 ]
 
 
@@ -35,6 +36,7 @@ def migrate(conn: sqlite3.Connection) -> None:
         have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
         if column not in have:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email_norm ON users(email_norm)")
 
 
 @contextmanager

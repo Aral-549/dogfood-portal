@@ -9,7 +9,7 @@
 <section id="comments">
   <h2>Comments</h2>
   {% for c in comments %}
-  <div class="card"><p>{{ c.body }}</p>
+  <div class="card"><p style="white-space:pre-wrap">{{ c.body }}</p>
     <p class="muted">{{ c.author }} &middot; {{ c.created_at }}
     {% if actor.user_id == c.user_id or is_organizer %}
       <form class="inline" method="post" action="/comments/{{ c.id }}/delete"><button>Delete</button></form>

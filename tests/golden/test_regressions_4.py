@@ -321,6 +321,10 @@ def live(tmp_path):
     port = _free_port()
     envv = {**os.environ, "DOGFOOD_DATA": str(tmp_path), "DOGFOOD_FIXTURES": str(FIXTURES_PATH),
             "DOGFOOD_DEMO_SESSIONS": "1", "DOGFOOD_LOG_LEVEL": "WARNING",
+            # These cases measure hashing concurrency with bursts of wrong passwords for one email.
+            # T3's failed-login throttle (t3-public.md case 19) would answer them 429 without hashing,
+            # so it is switched off here; the throttle has its own cases in test_t3_public.py.
+            "DOGFOOD_RATE_LIMITS": "off",
             "PYTHONPATH": str(SRC) + os.pathsep + os.environ.get("PYTHONPATH", "")}
     log = open(tmp_path / "uvicorn.log", "wb")
     proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "dogfood.app:app", "--host", "127.0.0.1",
