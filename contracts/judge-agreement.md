@@ -17,16 +17,19 @@ Per judge: `{judge, shared, agreement, mean_abs_dev, status}`
 - `consensus` for a review of project P by J = mean `z_r` of the other reviews of P (leave-one-out)
 - `agreement`: Pearson correlation between J's `z_r` and consensus over shared projects, 3 dp, or null
 - `mean_abs_dev`: mean `|z_r - consensus|` over shared projects, 3 dp, or null
-- `status`: `uninformative` | `insufficient` (shared < 3 or zero variance on either side) | `outlier` (agreement < 0) | `ok`
+- `status`: `uninformative` | `insufficient` (shared < 4 or zero variance on either side) | `outlier` (agreement < -0.3) | `ok`
+
+Thresholds amended 2026-09-27 (human-approved): were shared < 3 and agreement < 0, which flagged 7 of 30 fixture judges, one at -0.005.
 
 Per review flag `favoritism` when `z_r - consensus >= 2.0` (J rates P far above its other judges).
 
 ## Behavior cases (input -> expected output)
 | # | Input | Expected output | Notes |
 |---|-------|-----------------|-------|
-| 1 | J on P1, P2, P3 with z_r (-1, 0, +1); consensus from others (-0.5, 0, +0.5) | agreement 1.000, mean_abs_dev 0.333, status ok | (0.5 + 0 + 0.5) / 3 |
-| 2 | J z_r (+1, 0, -1); consensus (-1, 0, +1) | agreement -1.000, mean_abs_dev 1.333, status outlier | (2 + 0 + 2) / 3 |
-| 3 | J shares only 2 projects | agreement null, status insufficient | |
+| 1 | J on P1..P4 with z_r (-1, 0, 0, +1); consensus from others (-0.5, 0, 0, +0.5) | agreement 1.000, mean_abs_dev 0.250, status ok | consensus = J / 2, perfectly linear; (0.5 + 0 + 0 + 0.5) / 4 |
+| 2 | J z_r (+1, 0, 0, -1); consensus (-1, 0, 0, +1) | agreement -1.000, mean_abs_dev 1.000, status outlier | (2 + 0 + 0 + 2) / 4 |
+| 3 | J shares only 3 projects | agreement null, status insufficient | below the 4-project minimum |
+| 3a | J over 4 shared projects with agreement between -0.3 and 0 | status ok, agreement reported | weak disagreement is not flagged |
 | 4 | J's review of P: z_r +1.5, other reviews of P: -0.5 and -1.1 (consensus -0.8) | that review flagged favoritism (diff 2.3) | per review, independent of status |
 | 5 | J not in `informative` (e.g. fixture jdg_07: 4,4,4 everywhere) | status uninformative, no agreement computed | |
 | 6 | J's projects have no other reviewers | shared 0, status insufficient | |

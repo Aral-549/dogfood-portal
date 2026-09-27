@@ -10,7 +10,8 @@ from typing import Iterable
 
 from .scoring import ScoredReview
 
-MIN_SHARED = 3
+MIN_SHARED = 4
+OUTLIER_BELOW = -0.3
 FAVORITISM_GAP = 2.0
 
 
@@ -70,6 +71,6 @@ def judge_agreement(scored: Iterable[ScoredReview],
         if r is None:
             report.append(JudgeAgreement(judge, shared, None, mad, "insufficient"))
         else:
-            report.append(JudgeAgreement(judge, shared, round(r, 3), mad, "outlier" if r < 0 else "ok"))
+            report.append(JudgeAgreement(judge, shared, round(r, 3), mad, "outlier" if r < OUTLIER_BELOW else "ok"))
     flags.sort(key=lambda f: (-f.gap, f.judge, f.project))
     return report, flags

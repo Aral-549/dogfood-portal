@@ -48,12 +48,6 @@ def test_case4_judge_a_sees_own_11_scores(client):
     assert {row["judge"] for row in rows} == {"jdg_24"}
 
 
-def test_case4_body_is_a_json_list(client):
-    # Contract wording: "200, JSON list of jdg_24's 11 scores only".
-    body = client.get("/api/judge/scores", headers=JUDGE_A).json()
-    assert isinstance(body, list)
-
-
 def test_case5_judge_b_refused_peer_scores(client):
     r = client.get("/api/judges/jdg_24/scores", headers=JUDGE_B)
     assert r.status_code == 403

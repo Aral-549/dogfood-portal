@@ -173,7 +173,7 @@ normalized score with the mean of the *other* judges on the same project
 (leave-one-out consensus):
 
 - **agreement**: correlation between a judge's scores and the consensus over
-  their shared projects (needs 3+). Below 0 is flagged `outlier`.
+  their shared projects (needs 4+). Below -0.3 is flagged `outlier`.
 - **favoritism**: one review 2+ standard units above that project's other
   reviews.
 - **uninformative**: the judge's scores carry no ranking information
@@ -183,10 +183,16 @@ Nothing is excluded automatically. The organizer can exclude a judge's
 reviews with a written reason; it is reversible, audited, and the public
 results page states how many judges were excluded (no names).
 
-**Limit, stated plainly:** with 3 to 11 shared projects per judge,
-correlations are noisy. On the fixtures 7 of 30 judges come out below 0,
-some barely (-0.005). The flag is a prompt to look, not a verdict. Pairwise
-collusion (two judges boosting each other's picks) is not detected.
+On the fixtures this flags exactly one judge: jdg_04, whose scores run almost
+exactly against the other judges' (agreement -0.994 over 4 shared projects).
+
+**Why these thresholds.** The first version flagged anything below 0 from 3
+shared projects. That marked 7 of 30 judges, one at -0.005, which is noise,
+not disagreement. The trade-off of the stricter rule: 14 judges share fewer
+than 4 projects with anyone and cannot be assessed at all. More overlap in
+assignment (the tie-breaker button helps) is the real fix. The flag is a
+prompt to look, not a verdict. Pairwise collusion (two judges boosting each
+other's picks) is not detected.
 
 ## 6. Results and export
 
