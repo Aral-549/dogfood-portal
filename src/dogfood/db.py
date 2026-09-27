@@ -25,7 +25,8 @@ ADDED_COLUMNS = [
     ("events", "voting_closed_sent", "INTEGER NOT NULL DEFAULT 0"),
     ("users", "email_norm", "TEXT"),
     ("records", "revoked_at", "TEXT"),
-    ("records", "revoked_reason", "TEXT"),  # core.public.normalize_email, filled lazily (see app._registration_flags)
+    ("records", "revoked_reason", "TEXT"),
+    ("sessions", "last_used_at", "TEXT"),  # API tokens only, updated at most every 10 minutes  # core.public.normalize_email, filled lazily (see app._registration_flags)
 ]
 
 

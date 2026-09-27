@@ -1557,9 +1557,10 @@ def list_tokens(request: Request):
     actor = actor_of(request)
     if not actor.authenticated:
         return deny(request, Decision.UNAUTHENTICATED)
-    rows = conn_of(request).execute("SELECT token_hash, label, created_at FROM sessions WHERE user_id = ? "
+    rows = conn_of(request).execute("SELECT token_hash, label, created_at, last_used_at FROM sessions WHERE user_id = ? "
                                     "AND label LIKE 'api:%' ORDER BY created_at", (actor.user_id,)).fetchall()
-    return [{"id": r["token_hash"][:16], "name": r["label"][4:], "created_at": r["created_at"]} for r in rows]
+    return [{"id": r["token_hash"][:16], "name": r["label"][4:], "created_at": r["created_at"],
+             "last_used_at": r["last_used_at"]} for r in rows]
 
 
 @app.delete("/api/v1/tokens/{token_id}")

@@ -65,6 +65,7 @@ class Worker:
 
     def tick(self, conn, now: datetime) -> None:
         self._voting_closed(conn, now)
+        self._housekeeping(conn, now)
         due = conn.execute("SELECT d.*, w.url, w.secret FROM webhook_deliveries d JOIN webhooks w "
                            "ON w.id = d.webhook_id WHERE d.state = 'pending' AND d.next_at <= ? "
                            "ORDER BY d.next_at LIMIT 20", (format_utc(now),)).fetchall()
@@ -76,6 +77,21 @@ class Worker:
         for d, (status, error) in zip(due, outcomes):
             self._record(conn, d, now, status, error)
         self._prune(conn, now)
+
+    _last_housekeeping = None
+
+    def _housekeeping(self, conn, now: datetime) -> None:
+        """Hourly: expired login sessions and set-password links would otherwise pile up forever."""
+        if self._last_housekeeping and now - self._last_housekeeping < timedelta(hours=1):
+            return
+        self._last_housekeeping = now
+        stamp = format_utc(now)
+        with db.transaction(conn):
+            sessions = conn.execute("DELETE FROM sessions WHERE expires_at IS NOT NULL AND expires_at <= ?",
+                                    (stamp,)).rowcount
+            links = conn.execute("DELETE FROM password_links WHERE expires_at <= ?", (stamp,)).rowcount
+        if sessions or links:
+            logs.stage("housekeeping", "pruned", sessions=sessions, password_links=links)
 
     def _prune(self, conn, now: datetime) -> None:
         cutoff = format_utc(now - timedelta(days=KEEP_DAYS))

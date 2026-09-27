@@ -699,3 +699,28 @@ def test_openapi_documents_every_v1_body_and_outcome(tmp_path):
     vote = ops[("post", "/api/v1/votes")]["requestBody"]["content"]["application/json"]["schema"]
     assert vote["required"] == ["project"]
     assert "bearer" in spec["components"]["securitySchemes"]
+
+
+def test_token_last_used_is_recorded(tmp_path):
+    with portal(tmp_path) as c:
+        tok = c.post("/api/v1/tokens", json={"name": "ci"}, headers=ORGANIZER).json()["token"]
+        assert c.get("/api/v1/tokens", headers=ORGANIZER).json()[0]["last_used_at"] is None
+        c.get("/api/v1/projects", headers={"Authorization": f"Bearer {tok}"})
+        assert c.get("/api/v1/tokens", headers=ORGANIZER).json()[0]["last_used_at"]
+
+
+def test_housekeeping_prunes_expired_sessions_and_links(tmp_path):
+    from dogfood import db
+    from dogfood.webhook_worker import Worker
+    with portal(tmp_path) as c:
+        c.post("/register", data={"email": "old@example.org", "password": "a-long-password"})
+        c.post("/api/v1/judges", json={"email": "newjudge@example.org"}, headers=ORGANIZER)
+    conn = db.connect(str(tmp_path / "dogfood.db"))
+    live = lambda: conn.execute("SELECT COUNT(*) FROM sessions WHERE expires_at IS NOT NULL").fetchone()[0]
+    links = lambda: conn.execute("SELECT COUNT(*) FROM password_links").fetchone()[0]
+    assert live() >= 1 and links() >= 1
+    tokens_before = conn.execute("SELECT COUNT(*) FROM sessions WHERE expires_at IS NULL").fetchone()[0]
+    Worker(str(tmp_path / "dogfood.db")).tick(conn, datetime(2099, 1, 1, tzinfo=timezone.utc))
+    assert live() == 0 and links() == 0
+    assert conn.execute("SELECT COUNT(*) FROM sessions WHERE expires_at IS NULL").fetchone()[0] == tokens_before
+    conn.close()

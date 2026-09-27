@@ -64,13 +64,21 @@ def delete_session(conn, token: str) -> None:
     conn.execute("DELETE FROM sessions WHERE token_hash = ? AND label != 'demo'", (_token_hash(token),))
 
 
+TOKEN_USE_GRANULARITY = timedelta(minutes=10)
+
+
 def load_actor(conn, token: str | None, now: datetime) -> Actor:
     if not token:
         return Actor()
-    row = conn.execute("SELECT s.user_id, s.expires_at, u.is_admin FROM sessions s JOIN users u ON u.id = s.user_id "
-                       "WHERE s.token_hash = ?", (_token_hash(token),)).fetchone()
+    token_hash = _token_hash(token)
+    row = conn.execute("SELECT s.user_id, s.expires_at, s.label, s.last_used_at, u.is_admin FROM sessions s "
+                       "JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?", (token_hash,)).fetchone()
     if row is None or (row["expires_at"] and parse_utc(row["expires_at"]) <= now):
         return Actor()
+    if row["label"].startswith("api:") and (not row["last_used_at"]
+                                            or parse_utc(row["last_used_at"]) <= now - TOKEN_USE_GRANULARITY):
+        # So organizers can spot stale tokens; throttled to spare SQLite a write per request.
+        conn.execute("UPDATE sessions SET last_used_at = ? WHERE token_hash = ?", (format_utc(now), token_hash))
     uid = row["user_id"]
     organizer_of = frozenset(r[0] for r in conn.execute("SELECT event_id FROM organizers WHERE user_id = ?", (uid,)))
     judge_of = {r[0]: r[1] for r in conn.execute("SELECT event_id, id FROM judges WHERE user_id = ?", (uid,))}
