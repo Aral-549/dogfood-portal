@@ -10,7 +10,7 @@ moved in and out of the portal. Authorization is unchanged: every API route asks
 ## Inputs
 - API tokens: organizer creates a named personal token (`POST /api/v1/tokens`), shown once, stored hashed, revocable; used as `Authorization: Bearer <token>`. Acts with the creator's roles.
 - Webhook: `{url (http/https), secret (>= 16 chars), events: [..]}`, organizer only
-- Import file: JSON in the `fixtures.json` shape (the export format is a superset of it)
+- Import file: JSON in the `fixtures.json` shape (the export format is a superset of it). Import is admin-only, since it creates an event (clarified 2026-09-27). An empty portal is started with `DOGFOOD_FIXTURES=none`; its first admin is created with `python -m dogfood.cli create-admin <email>`.
 
 ## Outputs
 - `/api/v1/...` JSON routes for: events, projects (list/create/edit), teams (create/join), judges (invite/list), assignments (auto-assign), scores (own/by judge/submit), results, confidence, agreement, votes, comments, exports
@@ -18,7 +18,7 @@ moved in and out of the portal. Authorization is unchanged: every API route asks
 - `GET /api/v1/events/{id}/export.json`, `POST /api/v1/import`
 
 ## Webhook events
-`project.submitted`, `project.updated`, `score.submitted` (judge id and project id only, never values), `results.published`, `voting.closed` (sent by the first request after close).
+`project.submitted`, `project.updated`, `score.submitted` (judge id and project id only, never values), `results.published`, `voting.closed` (sent by the delivery worker within about a second of close; clarified 2026-09-27).
 
 ## Behavior cases (input -> expected output)
 | # | Input | Expected output | Notes |

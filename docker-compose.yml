@@ -9,6 +9,8 @@ services:
       # Demo mode: fixed auth tokens for the acceptance checker and demo logins.
       # Set to 0 (or remove) for a real event.
       DOGFOOD_DEMO_SESSIONS: "1"
+      # "none" starts an empty portal (no fixture data), e.g. to import a real event.
+      DOGFOOD_FIXTURES: ${DOGFOOD_FIXTURES:-/app/fixtures.json}
     volumes:
       - dogfood-data:/data
     restart: unless-stopped

@@ -18,4 +18,9 @@
     <p class="muted">Or ask a teammate for their invite link.</p>
   </form>
 {% endif %}
+{% if my_records %}
+<section class="card"><h2>Your certificates and records</h2>
+  <ul>{% for r in my_records %}<li><a href="/records/{{ r.id }}">{{ "Certificate" if r.kind == "participant" else "Judge record" }} ({{ r.event_id }})</a></li>{% endfor %}</ul>
+</section>
+{% endif %}
 {% endblock %}

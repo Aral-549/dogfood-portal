@@ -191,3 +191,48 @@ CREATE TABLE IF NOT EXISTS abuse_flags (
     detail   TEXT NOT NULL DEFAULT '{}',
     at       TEXT NOT NULL
 );
+
+-- T4 (contracts/t4-*.md)
+CREATE TABLE IF NOT EXISTS records (
+    id         TEXT PRIMARY KEY,                -- 128 random bits, hex
+    event_id   TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind       TEXT NOT NULL CHECK (kind IN ('participant', 'judge')),
+    payload    TEXT NOT NULL,                   -- canonical JSON that was signed
+    signature  TEXT NOT NULL,                   -- base64 Ed25519
+    issued_at  TEXT NOT NULL,
+    UNIQUE (event_id, user_id, kind)
+);
+
+CREATE TABLE IF NOT EXISTS webhooks (
+    id         TEXT PRIMARY KEY,
+    event_id   TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    url        TEXT NOT NULL,
+    secret     TEXT NOT NULL,                   -- needed to sign; never returned by the API
+    events     TEXT NOT NULL,                   -- JSON list
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    id          TEXT PRIMARY KEY,
+    webhook_id  TEXT NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+    event       TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    state       TEXT NOT NULL CHECK (state IN ('pending', 'delivered', 'failed')),
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    last_status INTEGER,
+    last_error  TEXT,
+    next_at     TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_deliveries_due ON webhook_deliveries(state, next_at);
+
+CREATE TABLE IF NOT EXISTS delivery_attempts (
+    delivery_id TEXT NOT NULL REFERENCES webhook_deliveries(id) ON DELETE CASCADE,
+    attempt     INTEGER NOT NULL,
+    at          TEXT NOT NULL,
+    status      INTEGER,
+    error       TEXT,
+    PRIMARY KEY (delivery_id, attempt)
+);

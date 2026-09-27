@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ "Certificate" if r.type == "participant" else "Judge record" }}{% endblock %}
+{% block content %}
+<style>@media print { header, .noprint { display: none } main { max-width: none } .cert { border: 0 } }
+.cert { border: 2px solid var(--line); border-radius: 10px; padding: 2.5rem; text-align: center; margin: 1rem 0 }
+.cert h1 { font-size: 2rem; margin: .3rem 0 } .cert .big { font-size: 1.6rem; font-weight: 700 }</style>
+<div class="cert">
+  <p class="muted">{{ r.event_name }}</p>
+  {% if r.type == "participant" %}
+    <h1>Certificate of participation</h1>
+    <p class="big">{{ r.name }}</p>
+    <p>built <strong>{{ r.project_title }}</strong> with team {{ r.team }}</p>
+  {% else %}
+    <h1>Judge participation record</h1>
+    <p class="big">{{ r.name }}</p>
+    <p>reviewed {{ r.projects_reviewed }} project{{ "" if r.projects_reviewed == 1 else "s" }} on {{ r.criteria | join(", ") }}</p>
+  {% endif %}
+  <p class="muted">Issued {{ r.issued_at }} &middot; record {{ r.record_id }}</p>
+</div>
+<p class="noprint">Signed with Ed25519. <a href="/verify/{{ r.record_id }}">Verify here</a>, or offline:
+  download <a href="/records/{{ r.record_id }}.json">the record</a> and <a href="/.well-known/dogfood-signing-key.pem">the public key</a>,
+  then follow "Verifying a record" in the README. <button onclick="window.print()">Print</button></p>
+{% endblock %}

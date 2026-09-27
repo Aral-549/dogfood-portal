@@ -18,11 +18,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.templating import Jinja2Templates
 
 from . import boot, db, logs, services as svc
-from .core import authz, csvexport
+from .core import authz, csvexport, importer, records, webhooks
 from .core.assignment import auto_assign
 from .core.confidence import tiebreak_assign
 from .core.public import ballot_order, normalize_email, tally, voting_state
 from .core.ratelimit import SlidingWindow
+from .webhook_worker import Worker, enqueue
 from .core.authz import Actor, Decision
 from .core.deadline import submissions_open
 from .core.timeutil import format_utc, parse_utc
@@ -40,11 +41,14 @@ async def lifespan(app: FastAPI):
     previous = (getattr(app.state, "conn", None), getattr(app.state, "db_path", None))
     conn = app.state.conn = boot.boot()  # boot-time connection; requests open their own
     app.state.db_path = boot.db_path()
+    worker = Worker(app.state.db_path)
+    worker.start()
     app.state.limits = {  # contracts/t3-public.md cases 18-20; in memory, cleared by a restart
         "vote": SlidingWindow(10, 60), "comment": SlidingWindow(5, 60),
         "login_fail": SlidingWindow(5, 300), "register_ip": SlidingWindow(3, 3600),
     }
     yield
+    worker.stop()
     conn.close()
     app.state.conn, app.state.db_path = previous
 
@@ -87,6 +91,11 @@ async def _handle(request: Request, call_next, conn: sqlite3.Connection, rid: st
         logs.stage("auth", "csrf_block", request_id=rid, origin=request.headers.get("origin"))
         return JSONResponse({"error": "cross_origin"}, status_code=403)
     response = await call_next(request)
+    if request.url.path.startswith("/embed/"):
+        response.headers["Content-Security-Policy"] = "frame-ancestors *"
+    else:  # clickjacking protection everywhere except the embeddable widget
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
     logs.stage("http", "response", request_id=rid, status=response.status_code)
     return response
 
@@ -220,6 +229,7 @@ def gallery_page(request: Request, q: str = "", track: str = "", page: str | Non
 
 
 @app.get("/api/projects")
+@app.get("/api/v1/projects")
 def gallery_api(request: Request, q: str = "", track: str = "", page: str | None = None):
     ev = event_for(request)
     if ev is None:
@@ -370,12 +380,16 @@ def me(request: Request):
         team = conn.execute("SELECT * FROM teams WHERE id = ?", (actor.team_id(ev["id"]),)).fetchone()
         projects = conn.execute("SELECT * FROM projects WHERE team_id = ? ORDER BY id", (team["id"],)).fetchall()
     is_open = bool(ev) and submissions_open(svc.event_close(ev), request.state.now)
-    return render(request, "me.html", {"user": user, "team": team, "projects": projects, "is_open": is_open})
+    my_records = conn.execute("SELECT id, kind, event_id FROM records WHERE user_id = ? ORDER BY issued_at",
+                              (actor.user_id,)).fetchall()
+    return render(request, "me.html", {"user": user, "team": team, "projects": projects, "is_open": is_open,
+                                       "my_records": my_records})
 
 
 # --- teams ------------------------------------------------------------------------------
 
 @app.post("/teams")
+@app.post("/api/v1/teams")
 async def create_team(request: Request):
     conn, actor, ev = conn_of(request), actor_of(request), event_for(request)
     if not actor.authenticated:
@@ -402,6 +416,7 @@ def join_page(request: Request, code: str):
 
 
 @app.post("/join/{code}")
+@app.post("/api/v1/join/{code}")
 def join(request: Request, code: str):
     conn, actor = conn_of(request), actor_of(request)
     if not actor.authenticated:
@@ -478,6 +493,7 @@ def _validate_project(data: dict, conn, event_id: str) -> tuple[dict | None, str
 
 @app.post("/projects/new")
 @app.post("/api/projects")
+@app.post("/api/v1/projects")
 async def create_project(request: Request):
     conn, actor, ev = conn_of(request), actor_of(request), event_for(request)
     if ev is None:
@@ -498,6 +514,8 @@ async def create_project(request: Request):
         (pid, ev["id"], actor.team_id(ev["id"]), fields["track_id"], fields["title"], fields["summary"],
          fields["repo_url"], fields["status"], stamp if fields["status"] == "submitted" else None, stamp, stamp))
     svc.audit(conn, actor, ev["id"], "project.create", pid, status=fields["status"])
+    if fields["status"] == "submitted":
+        enqueue(conn, ev["id"], "project.submitted", {"project": pid, "title": fields["title"]}, request.state.now)
     if wants_json(request):
         return JSONResponse({"id": pid, **fields}, status_code=201)
     return RedirectResponse(f"/projects/{pid}", status_code=303)
@@ -520,6 +538,7 @@ def edit_project_page(request: Request, project_id: str):
 
 @app.post("/projects/{project_id}/edit")
 @app.put("/api/projects/{project_id}")
+@app.put("/api/v1/projects/{project_id}")
 async def edit_project(request: Request, project_id: str):
     conn, actor = conn_of(request), actor_of(request)
     p = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
@@ -540,6 +559,9 @@ async def edit_project(request: Request, project_id: str):
                  (fields["title"], fields["summary"], fields["repo_url"], fields["track_id"], fields["status"],
                   submitted_at, stamp, project_id))
     svc.audit(conn, actor, ev["id"], "project.edit", project_id, status=fields["status"])
+    became_submitted = p["status"] != "submitted" and fields["status"] == "submitted"
+    enqueue(conn, ev["id"], "project.submitted" if became_submitted else "project.updated",
+            {"project": project_id, "title": fields["title"], "status": fields["status"]}, request.state.now)
     if wants_json(request):
         return {"id": project_id, **fields}
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
@@ -548,6 +570,7 @@ async def edit_project(request: Request, project_id: str):
 # --- judging -------------------------------------------------------------------------------
 
 @app.get("/api/judge/scores")
+@app.get("/api/v1/judge/scores")
 def my_scores(request: Request):
     actor, ev = actor_of(request), event_for(request)
     if ev is None:
@@ -560,6 +583,7 @@ def my_scores(request: Request):
 
 
 @app.get("/api/judges/{judge_id}/scores")
+@app.get("/api/v1/judges/{judge_id}/scores")
 def judge_scores_by_id(request: Request, judge_id: str):
     conn, actor = conn_of(request), actor_of(request)
     row = conn.execute("SELECT event_id FROM judges WHERE id = ?", (judge_id,)).fetchone()
@@ -590,6 +614,7 @@ def judge_home(request: Request):
 
 @app.post("/judge/projects/{project_id}")
 @app.post("/api/judge/scores/{project_id}")
+@app.post("/api/v1/judge/scores/{project_id}")
 async def submit_score(request: Request, project_id: str):
     conn, actor = conn_of(request), actor_of(request)
     p = conn.execute("SELECT event_id, team_id FROM projects WHERE id = ?", (project_id,)).fetchone()
@@ -629,6 +654,8 @@ async def submit_score(request: Request, project_id: str):
         conn.execute("ROLLBACK")
         raise
     svc.audit(conn, actor, ev["id"], "score.submit", project_id, judge=jid, criteria=values)
+    # Never the values: webhooks must not become a side door around peer-score isolation.
+    enqueue(conn, ev["id"], "score.submitted", {"judge": jid, "project": project_id}, request.state.now)
     if wants_json(request):
         return {"judge": jid, "project": project_id, "criteria": values, "comment": comment}
     return RedirectResponse("/judge", status_code=303)
@@ -645,6 +672,7 @@ def _organizer_guard(request: Request):
 
 
 @app.get("/api/export.csv")
+@app.get("/api/v1/export.csv")
 def export_csv(request: Request):
     ev = event_for(request)
     if ev is None:
@@ -683,6 +711,9 @@ def organizer_home(request: Request):
                    "total": conn.execute("SELECT COUNT(*) FROM votes WHERE event_id = ?", (ev["id"],)).fetchone()[0]},
         "abuse": conn.execute("SELECT f.*, u.email FROM abuse_flags f JOIN users u ON u.id = f.user_id "
                               "ORDER BY f.id DESC LIMIT 100").fetchall(),
+        "records_count": conn.execute("SELECT COUNT(*) FROM records WHERE event_id = ?", (ev["id"],)).fetchone()[0],
+        "hooks": [dict(h) | {"events": json.loads(h["events"])} for h in conn.execute(
+            "SELECT id, url, events FROM webhooks WHERE event_id = ?", (ev["id"],))],
         "voided": {r["user_id"]: r["reason"] for r in conn.execute(
             "SELECT user_id, reason FROM voided_voters WHERE event_id = ?", (ev["id"],))},
         "agreement": a["agreement"], "favoritism": a["favoritism"], "excluded": a["excluded"]})
@@ -696,6 +727,7 @@ def _prize_places(raw) -> int:
 
 
 @app.get("/api/confidence.csv")
+@app.get("/api/v1/confidence.csv")
 def confidence_csv(request: Request):
     ev = event_for(request)
     if ev is None:
@@ -717,6 +749,7 @@ def confidence_csv(request: Request):
 
 
 @app.get("/api/judge-agreement")
+@app.get("/api/v1/judge-agreement")
 def judge_agreement_api(request: Request):
     ev, denied = _organizer_guard(request)
     if denied:
@@ -729,6 +762,7 @@ def judge_agreement_api(request: Request):
 
 
 @app.post("/organizer/tiebreak")
+@app.post("/api/v1/assignments/tiebreak")
 async def run_tiebreak(request: Request):
     ev, denied = _organizer_guard(request)
     if denied:
@@ -775,6 +809,8 @@ async def run_tiebreak(request: Request):
 
 @app.post("/organizer/judges/{judge_id}/exclude")
 @app.post("/organizer/judges/{judge_id}/include")
+@app.post("/api/v1/judges/{judge_id}/exclude")
+@app.post("/api/v1/judges/{judge_id}/include")
 async def set_judge_exclusion(request: Request, judge_id: str):
     ev, denied = _organizer_guard(request)
     if denied:
@@ -800,6 +836,7 @@ async def set_judge_exclusion(request: Request, judge_id: str):
 
 
 @app.post("/organizer/event")
+@app.post("/api/v1/event")
 async def update_event(request: Request):
     ev, denied = _organizer_guard(request)
     if denied:
@@ -836,6 +873,7 @@ async def update_event(request: Request):
 
 
 @app.post("/organizer/events")
+@app.post("/api/v1/events")
 async def create_event(request: Request):
     actor = actor_of(request)
     if not actor.authenticated:
@@ -865,6 +903,7 @@ async def create_event(request: Request):
 
 
 @app.post("/organizer/rubric")
+@app.post("/api/v1/rubric")
 async def update_rubric(request: Request):
     ev, denied = _organizer_guard(request)
     if denied:
@@ -889,6 +928,7 @@ async def update_rubric(request: Request):
 
 
 @app.post("/organizer/judges")
+@app.post("/api/v1/judges")
 async def invite_judge(request: Request):
     ev, denied = _organizer_guard(request)
     if denied:
@@ -926,6 +966,7 @@ async def invite_judge(request: Request):
 
 
 @app.post("/organizer/assign")
+@app.post("/api/v1/assignments/auto")
 async def run_assignment(request: Request):
     ev, denied = _organizer_guard(request)
     if denied:
@@ -956,14 +997,19 @@ async def run_assignment(request: Request):
 
 
 @app.post("/organizer/publish")
+@app.post("/api/v1/results/publish")
 async def publish(request: Request):
     ev, denied = _organizer_guard(request)
     if denied:
         return denied
     value = 0 if (await body_of(request)).get("unpublish") else 1
-    conn_of(request).execute("UPDATE events SET results_published = ? WHERE id = ?", (value, ev["id"]))
-    svc.audit(conn_of(request), actor_of(request), ev["id"], "results.publish" if value else "results.unpublish",
-              ev["id"])
+    conn = conn_of(request)
+    with db.transaction(conn):
+        changed = conn.execute("UPDATE events SET results_published = ? WHERE id = ? AND results_published != ?",
+                               (value, ev["id"], value)).rowcount
+        svc.audit(conn, actor_of(request), ev["id"], "results.publish" if value else "results.unpublish", ev["id"])
+        if changed and value:
+            enqueue(conn, ev["id"], "results.published", {"event": ev["id"]}, request.state.now)
     return RedirectResponse(f"/organizer?event={ev['id']}", status_code=303)
 
 
@@ -1109,6 +1155,8 @@ def vote_results(request: Request):
 
 @app.post("/organizer/voters/{user_id}/void")
 @app.post("/organizer/voters/{user_id}/unvoid")
+@app.post("/api/v1/voters/{user_id}/void")
+@app.post("/api/v1/voters/{user_id}/unvoid")
 async def set_voter_void(request: Request, user_id: str):
     ev, denied = _organizer_guard(request)
     if denied:
@@ -1178,3 +1226,289 @@ def delete_comment(request: Request, comment_id: int):
     if wants_json(request):
         return Response(status_code=204)
     return RedirectResponse(f"/projects/{c['project_id']}#comments", status_code=303)
+
+
+# --- T4: signed records and certificates (contracts/t4-records-widget.md) ---------------------------
+
+@app.get("/.well-known/dogfood-signing-key.pem")
+def signing_key_pem():
+    return Response(records.public_pem(boot.SIGNING_KEY), media_type="application/x-pem-file")
+
+
+@app.post("/organizer/records/issue")
+@app.post("/api/v1/records/issue")
+async def issue_records(request: Request):
+    ev, denied = _organizer_guard(request)
+    if denied:
+        return denied
+    if not ev["results_published"]:
+        return JSONResponse({"error": "results_not_published"}, status_code=409)
+    conn, stamp = conn_of(request), format_utc(request.state.now)
+    criteria = list(svc.rubric(conn, ev["id"]))
+    subjects = []
+    for r in conn.execute(
+            "SELECT DISTINCT m.user_id, COALESCE(NULLIF(u.name, ''), u.email) AS name, t.name AS team, "
+            "MIN(p.id) AS project, p.title FROM projects p JOIN teams t ON t.id = p.team_id "
+            "JOIN team_members m ON m.team_id = t.id JOIN users u ON u.id = m.user_id "
+            "WHERE p.event_id = ? AND p.status = 'submitted' AND p.superseded_by IS NULL "
+            "GROUP BY m.user_id ORDER BY m.user_id", (ev["id"],)):
+        subjects.append((r["user_id"], "participant", {"name": r["name"], "team": r["team"],
+                                                        "project": r["project"], "project_title": r["title"]}))
+    for r in conn.execute(
+            "SELECT j.id, j.user_id, COALESCE(NULLIF(u.name, ''), u.email) AS name, COUNT(rv.id) AS n "
+            "FROM judges j JOIN users u ON u.id = j.user_id JOIN reviews rv ON rv.judge_id = j.id "
+            "WHERE j.event_id = ? GROUP BY j.id HAVING n > 0 ORDER BY j.id", (ev["id"],)):
+        # Count only: which projects and what scores stay private (peer isolation).
+        subjects.append((r["user_id"], "judge", {"name": r["name"], "judge_id": r["id"],
+                                                  "projects_reviewed": r["n"], "criteria": criteria}))
+    issued = 0
+    with db.transaction(conn):
+        for user_id, kind, fields in subjects:
+            if conn.execute("SELECT 1 FROM records WHERE event_id = ? AND user_id = ? AND kind = ?",
+                            (ev["id"], user_id, kind)).fetchone():
+                continue
+            rid = secrets.token_hex(16)
+            record = {"type": kind, "record_id": rid, "event_id": ev["id"], "event_name": ev["name"],
+                      "issued_at": stamp, **fields}
+            conn.execute("INSERT INTO records VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         (rid, ev["id"], user_id, kind, records.canonical(record).decode("utf-8"),
+                          records.sign(boot.SIGNING_KEY, record), stamp))
+            issued += 1
+        svc.audit(conn, actor_of(request), ev["id"], "records.issue", ev["id"], issued=issued)
+    if wants_json(request):
+        return {"issued": issued}
+    return RedirectResponse(f"/organizer?event={ev['id']}", status_code=303)
+
+
+def _record(conn, record_id: str):
+    row = conn.execute("SELECT * FROM records WHERE id = ?", (record_id,)).fetchone()
+    return (row, json.loads(row["payload"])) if row else (None, None)
+
+
+@app.get("/records/{record_id}.json")
+def record_json(request: Request, record_id: str):
+    row, record = _record(conn_of(request), record_id)
+    if row is None:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return {"record": record, "signature": row["signature"]}
+
+
+@app.get("/records/{record_id}", response_class=HTMLResponse)
+def record_page(request: Request, record_id: str):
+    row, record = _record(conn_of(request), record_id)
+    if row is None:
+        return render(request, "message.html", {"title": "Not found", "message": "No such record."}, status=404)
+    return render(request, "record.html", {"r": record, "row": row})
+
+
+@app.get("/verify/{record_id}", response_class=HTMLResponse)
+def verify_page(request: Request, record_id: str):
+    row, record = _record(conn_of(request), record_id)
+    if row is None:
+        return render(request, "message.html", {"title": "Not found", "message": "No such record."}, status=404)
+    ok = records.verify(boot.SIGNING_KEY.public_key(), record, row["signature"])
+    return render(request, "message.html", {"title": "Record " + ("valid" if ok else "INVALID"),
+                                            "message": ("The signature matches this portal's public key."
+                                                        if ok else "The signature does not match.")})
+
+
+# --- T4: embeddable gallery widget ------------------------------------------------------------
+
+@app.get("/embed/gallery", response_class=HTMLResponse)
+def embed_gallery(request: Request):
+    ev = event_for(request)
+    items = svc.gallery(conn_of(request), ev["id"])[0] if ev else []
+    return TEMPLATES.TemplateResponse(request, "embed.html", {"items": items, "event": ev})
+
+
+WIDGET_JS = """(function () {
+  var s = document.currentScript;
+  var base = new URL(s.src).origin;
+  var ev = s.getAttribute("data-event");
+  var f = document.createElement("iframe");
+  f.src = base + "/embed/gallery" + (ev ? "?event=" + encodeURIComponent(ev) : "");
+  f.title = "Hackathon gallery";
+  f.style.width = "100%";
+  f.style.border = "0";
+  f.height = s.getAttribute("data-height") || "600";
+  f.loading = "lazy";
+  s.parentNode.insertBefore(f, s.nextSibling);
+})();
+"""
+
+
+@app.get("/widget.js")
+def widget_js():
+    return Response(WIDGET_JS, media_type="application/javascript")
+
+
+# --- T4: API tokens ---------------------------------------------------------------------------------------
+
+@app.post("/api/v1/tokens")
+async def create_token(request: Request):
+    actor = actor_of(request)
+    if not actor.authenticated:
+        return deny(request, Decision.UNAUTHENTICATED)
+    name = clean((await body_of(request)).get("name"), 80) or "api"
+    conn = conn_of(request)
+    token = "dft_" + secrets.token_urlsafe(32)
+    with db.transaction(conn):
+        svc.create_session(conn, actor.user_id, label=f"api:{name}", token=token, ttl=None)
+        tid = svc.token_id(token)
+        svc.audit(conn, actor, None, "token.create", tid, name=name)
+    return JSONResponse({"id": tid, "name": name, "token": token}, status_code=201)
+
+
+@app.get("/api/v1/tokens")
+def list_tokens(request: Request):
+    actor = actor_of(request)
+    if not actor.authenticated:
+        return deny(request, Decision.UNAUTHENTICATED)
+    rows = conn_of(request).execute("SELECT token_hash, label, created_at FROM sessions WHERE user_id = ? "
+                                    "AND label LIKE 'api:%' ORDER BY created_at", (actor.user_id,)).fetchall()
+    return [{"id": r["token_hash"][:16], "name": r["label"][4:], "created_at": r["created_at"]} for r in rows]
+
+
+@app.delete("/api/v1/tokens/{token_id}")
+def revoke_token(request: Request, token_id: str):
+    actor = actor_of(request)
+    if not actor.authenticated:
+        return deny(request, Decision.UNAUTHENTICATED)
+    if len(token_id) != 16 or any(ch not in "0123456789abcdef" for ch in token_id):
+        return deny(request, Decision.NOT_FOUND)
+    conn = conn_of(request)
+    with db.transaction(conn):
+        removed = conn.execute("DELETE FROM sessions WHERE user_id = ? AND label LIKE 'api:%' AND "
+                               "substr(token_hash, 1, 16) = ?", (actor.user_id, token_id)).rowcount
+        if removed:
+            svc.audit(conn, actor, None, "token.revoke", token_id)
+    return Response(status_code=204) if removed else deny(request, Decision.NOT_FOUND)
+
+
+# --- T4: webhooks -------------------------------------------------------------------------------------------
+
+@app.post("/api/v1/webhooks")
+async def create_webhook(request: Request):
+    ev, denied = _organizer_guard(request)
+    if denied:
+        return denied
+    data, conn = await body_of(request), conn_of(request)
+    events = data.get("events")
+    if isinstance(events, str):
+        events = [e.strip() for e in events.split(",") if e.strip()]
+    error = webhooks.validate(data.get("url"), data.get("secret"), events)
+    if error:
+        return JSONResponse({"error": "invalid", "detail": error}, status_code=422)
+    wid = "wh_" + secrets.token_hex(6)
+    with db.transaction(conn):
+        conn.execute("INSERT INTO webhooks VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (wid, ev["id"], data["url"], data["secret"], json.dumps(events), actor_of(request).user_id,
+                      format_utc(request.state.now)))
+        svc.audit(conn, actor_of(request), ev["id"], "webhook.create", wid, url=data["url"], events=events)
+    body = {"id": wid, "url": data["url"], "events": events}
+    return JSONResponse(body, status_code=201) if wants_json(request) else \
+        RedirectResponse(f"/organizer?event={ev['id']}", status_code=303)
+
+
+@app.post("/organizer/webhooks")
+async def create_webhook_form(request: Request):
+    return await create_webhook(request)
+
+
+@app.get("/api/v1/webhooks")
+def list_webhooks(request: Request):
+    ev, denied = _organizer_guard(request)
+    if denied:
+        return denied
+    rows = conn_of(request).execute("SELECT id, url, events, created_at FROM webhooks WHERE event_id = ?",
+                                    (ev["id"],)).fetchall()
+    return [{"id": r["id"], "url": r["url"], "events": json.loads(r["events"]), "created_at": r["created_at"]}
+            for r in rows]
+
+
+@app.delete("/api/v1/webhooks/{webhook_id}")
+def delete_webhook(request: Request, webhook_id: str):
+    ev, denied = _organizer_guard(request)
+    if denied:
+        return denied
+    conn = conn_of(request)
+    with db.transaction(conn):
+        removed = conn.execute("DELETE FROM webhooks WHERE id = ? AND event_id = ?", (webhook_id, ev["id"])).rowcount
+        if removed:
+            svc.audit(conn, actor_of(request), ev["id"], "webhook.delete", webhook_id)
+    return Response(status_code=204) if removed else deny(request, Decision.NOT_FOUND)
+
+
+@app.get("/api/v1/webhooks/{webhook_id}/deliveries")
+def webhook_deliveries(request: Request, webhook_id: str):
+    ev, denied = _organizer_guard(request)
+    if denied:
+        return denied
+    conn = conn_of(request)
+    if not conn.execute("SELECT 1 FROM webhooks WHERE id = ? AND event_id = ?", (webhook_id, ev["id"])).fetchone():
+        return deny(request, Decision.NOT_FOUND)
+    out = []
+    for d in conn.execute("SELECT id, event, state, attempts, last_status, last_error, created_at FROM "
+                          "webhook_deliveries WHERE webhook_id = ? ORDER BY created_at DESC LIMIT 200", (webhook_id,)):
+        attempts = [dict(a) for a in conn.execute("SELECT attempt, at, status, error FROM delivery_attempts "
+                                                  "WHERE delivery_id = ? ORDER BY attempt", (d["id"],))]
+        out.append({**dict(d), "attempt_log": attempts})  # status codes only, never bodies
+    return out
+
+
+# --- T4: events, bulk export and import ------------------------------------------------------------------
+
+@app.get("/api/v1/events")
+def list_events(request: Request):
+    rows = conn_of(request).execute("SELECT id, name, submissions_close, judging_close, voting_open, voting_close, "
+                                    "results_published FROM events ORDER BY created_at, id").fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/v1/events/{event_id}/export.json")
+def export_event(request: Request, event_id: str):
+    conn = conn_of(request)
+    ev = svc.get_event(conn, event_id)
+    if ev is None:
+        return deny(request, Decision.NOT_FOUND)
+    decision = authz.export_results(actor_of(request), event_id)
+    if not decision.allowed:
+        return deny(request, decision)
+    body = svc.export_event(conn, ev, voting_closed=_vstate(ev, request.state.now) == "closed")
+    svc.audit(conn, actor_of(request), event_id, "event.export", event_id)
+    return JSONResponse(body, headers={"Content-Disposition": f'attachment; filename="{event_id}.json"'})
+
+
+@app.post("/api/v1/import")
+async def import_event(request: Request):
+    actor = actor_of(request)
+    if not actor.authenticated:
+        return deny(request, Decision.UNAUTHENTICATED)
+    if not actor.is_admin:
+        return deny(request, Decision.FORBIDDEN)
+    data, conn = await body_of(request), conn_of(request)
+    event = data.get("event") if isinstance(data, dict) else None
+    if isinstance(event, dict) and isinstance(event.get("id"), str) and svc.get_event(conn, event["id"]):
+        return JSONResponse({"error": "event_exists", "event": event["id"]}, status_code=409)
+    try:
+        report = importer.import_fixtures(conn, data, request.state.now, boot.invite_secret())
+    except importer.FixtureError as e:
+        return JSONResponse({"error": "invalid", "detail": str(e)}, status_code=422)
+    except sqlite3.IntegrityError as e:  # ids that already belong to another event
+        return JSONResponse({"error": "conflict", "detail": str(e)}, status_code=409)
+    svc.apply_import_extras(conn, event["id"], data, actor, request.state.now)
+    return JSONResponse({"event": event["id"], "counts": report.counts, "rejected": report.rejected,
+                         "duplicates": report.duplicates}, status_code=201)
+
+
+@app.get("/api/v1/results")
+def results_api(request: Request):
+    """Judged ranking: public once published, always visible to organizers."""
+    ev = event_for(request)
+    if ev is None:
+        return deny(request, Decision.NOT_FOUND)
+    if not ev["results_published"] and not authz.export_results(actor_of(request), ev["id"]).allowed:
+        return deny(request, Decision.FORBIDDEN, "results_not_published")
+    res, meta = svc.results(conn_of(request), ev["id"])
+    return [{"rank": r.rank, "project": r.project, "title": meta[r.project]["title"], "team": meta[r.project]["team"],
+             "n_reviews": r.n_reviews} for r in res]

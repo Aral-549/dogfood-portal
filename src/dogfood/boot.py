@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from . import db, logs, services as svc
-from .core import importer
+from .core import importer, records
 from .core.timeutil import format_utc
 
 DEMO_PASSWORD = "dogfood-demo"
@@ -38,8 +38,14 @@ def boot() -> sqlite3.Connection:
     data_dir.mkdir(parents=True, exist_ok=True)
     conn = db.connect(db_path())
     db.init_schema(conn)
+    _load_signing_key(conn, data_dir)
     fixtures = os.environ.get("DOGFOOD_FIXTURES", "fixtures.json")
     now = svc.utcnow()
+    if fixtures.strip().lower() in ("", "none"):
+        # An empty portal for a real event: nothing seeded, no demo accounts (migration target for imports).
+        logs.stage("importer", "skip", reason="DOGFOOD_FIXTURES=none")
+        _disable_demo(conn)
+        return conn
     data = importer.load_file(fixtures)  # FixtureError aborts startup: never half-seeded
     event = data.get("event")
     if not isinstance(event, dict) or not isinstance(event.get("id"), str) or not event["id"].strip():
@@ -56,6 +62,23 @@ def boot() -> sqlite3.Connection:
     else:
         _disable_demo(conn)
     return conn
+
+
+SIGNING_KEY = None  # set at boot; used by the records routes
+
+
+def _load_signing_key(conn: sqlite3.Connection, data_dir: Path) -> None:
+    global SIGNING_KEY
+    SIGNING_KEY, created = records.load_or_create_key(data_dir / "signing_key")
+    if created and conn.execute("SELECT 1 FROM records LIMIT 1").fetchone():
+        logs.stage("boot", "signing_key_regenerated", warning="existing records will no longer verify; "
+                   "restore /data/signing_key from backup")
+        print("WARNING: a new signing key was generated but signed records exist; they will no longer verify. "
+              "Restore /data/signing_key from your backup.", file=sys.stderr, flush=True)
+
+
+def invite_secret() -> str:
+    return _secret(Path(os.environ.get("DOGFOOD_DATA", "data")))
 
 
 def _disable_demo(conn: sqlite3.Connection) -> None:

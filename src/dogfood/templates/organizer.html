@@ -128,6 +128,24 @@
 </section>
 
 <section class="card">
+  <h2>Certificates, records and integrations</h2>
+  <form method="post" action="/organizer/records/issue?event={{ event.id }}" class="row">
+    <button>Issue signed certificates and judge records</button>
+    <span class="muted">{{ records_count }} issued. Needs published results. Idempotent.</span>
+  </form>
+  <p><a href="/api/v1/events/{{ event.id }}/export.json">Export this event (JSON)</a> &middot;
+     Embed the gallery: <code>&lt;script src="{{ request.base_url }}widget.js" data-event="{{ event.id }}"&gt;&lt;/script&gt;</code></p>
+  <h3>Webhooks</h3>
+  <ul>{% for h in hooks %}<li>{{ h.url }}: {{ h.events | join(", ") }} <span class="muted">{{ h.id }}</span></li>{% else %}<li class="muted">None. Nothing is sent over the network until you add one.</li>{% endfor %}</ul>
+  <form method="post" action="/organizer/webhooks?event={{ event.id }}" class="row">
+    <input name="url" placeholder="https://example.org/hook" required>
+    <input name="secret" placeholder="secret (16+ chars)" minlength="16" required>
+    <input name="events" value="project.submitted,score.submitted,results.published,voting.closed" size="50">
+    <button>Add webhook</button>
+  </form>
+</section>
+
+<section class="card">
   <h2>Audit log (latest 50)</h2>
   <div class="table-wrap"><table>
     <tr><th>When</th><th>Who</th><th>Action</th><th>Subject</th><th>Detail</th></tr>

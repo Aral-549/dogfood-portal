@@ -78,6 +78,51 @@ submission flow anyway, move the deadline on the organizer page, then run
 `docker compose down -v` afterwards to restore the fixture data.
 `./scripts/check.sh` is unaffected either way because it uses its own volume.
 
+## Beyond T2: public participation and integrations
+
+**Community vote (T3).** The organizer sets a voting window on the organizer
+page. Logged-in users vote at `/vote`; ballots are in a random order unique to
+each voter; nobody sees tallies (organizers included) until the window
+closes. Comments on project pages. Rate limits, duplicate-account flags and a
+full audit trail; the organizer can void a flagged account's votes.
+
+**API.** Everything is under `/api/v1`, documented at `/openapi.json`. Create a
+personal token with `POST /api/v1/tokens` and send it as
+`Authorization: Bearer <token>`; it carries your own roles, nothing more.
+
+**Webhooks.** Organizer page, "Add webhook". Each delivery is signed:
+`X-Dogfood-Signature: sha256=<HMAC-SHA256(secret, raw body)>`. Failed deliveries
+are retried after 10 s, 60 s and 300 s. Nothing leaves the portal until you add
+a webhook.
+
+**Certificates and signed judge records.** After publishing results, "Issue
+signed certificates and judge records". Verifying a record offline, without
+trusting the portal:
+
+```
+curl -s http://localhost:8080/records/<id>.json > rec.json
+curl -s http://localhost:8080/.well-known/dogfood-signing-key.pem > key.pem
+python3 -c "import json,base64;d=json.load(open('rec.json'));open('canon.json','wb').write(json.dumps(d['record'],sort_keys=True,separators=(',',':'),ensure_ascii=False).encode());open('sig.bin','wb').write(base64.b64decode(d['signature']))"
+openssl pkeyutl -verify -pubin -inkey key.pem -rawin -in canon.json -sigfile sig.bin
+```
+
+Back up `/data/signing_key` with the volume: a new key cannot verify old records.
+
+**Embed the gallery** on any site:
+`<script src="http://localhost:8080/widget.js" data-event="evt_01"></script>`
+
+**Moving an event in and out.** `GET /api/v1/events/<id>/export.json` (organizer)
+gives the whole event in the `fixtures.json` shape plus rubric, exclusions,
+comments and (after voting closes) votes. To load it into a fresh portal:
+
+```
+DOGFOOD_FIXTURES=none docker compose up -d
+docker compose exec portal python -m dogfood.cli create-admin you@example.org
+# open the printed set-password link, log in, create a token, then:
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+     --data-binary @evt_01.json http://localhost:8080/api/v1/import
+```
+
 ## Docs
 
 - `ARCHITECTURE.md`: how it fits together and why

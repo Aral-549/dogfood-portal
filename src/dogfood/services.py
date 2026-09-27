@@ -271,3 +271,93 @@ def progress(conn, event_id: str) -> list[dict]:
 
 def team_size(conn, team_id: str) -> int:
     return conn.execute("SELECT COUNT(*) FROM team_members WHERE team_id = ?", (team_id,)).fetchone()[0]
+
+
+# --- T4: tokens, bulk export/import ---------------------------------------------------------------
+
+def token_id(token: str) -> str:
+    """Public id of an API token: a prefix of its hash, never the token."""
+    return _token_hash(token)[:16]
+
+
+def export_event(conn, ev, voting_closed: bool) -> dict:
+    """fixtures.json shape (so core/importer reads it back) plus extras. No secrets, no hashes, no tokens."""
+    eid = ev["id"]
+    tracks = [{"id": r["id"], "name": r["name"]} for r in
+              conn.execute("SELECT id, name FROM tracks WHERE event_id = ? ORDER BY id", (eid,))]
+    judges = []
+    for j in conn.execute("SELECT j.id, u.name, u.email FROM judges j JOIN users u ON u.id = j.user_id "
+                          "WHERE j.event_id = ? ORDER BY j.id", (eid,)):
+        tr = [r[0] for r in conn.execute("SELECT track_id FROM judge_tracks WHERE judge_id = ? ORDER BY track_id",
+                                         (j["id"],))]
+        judges.append({"id": j["id"], "name": j["name"], "email": j["email"], "tracks": tr})
+    teams = []
+    for t in conn.execute("SELECT id, name FROM teams WHERE event_id = ? ORDER BY id", (eid,)):
+        members = [r[0] for r in conn.execute("SELECT u.email FROM team_members m JOIN users u ON u.id = m.user_id "
+                                              "WHERE m.team_id = ? ORDER BY u.email", (t["id"],))]
+        teams.append({"id": t["id"], "name": t["name"], "members": members})
+    projects = [{"id": p["id"], "team": p["team_id"], "track": p["track_id"], "title": p["title"],
+                 "summary": p["summary"], "repo_url": p["repo_url"], "submitted_at": p["submitted_at"]}
+                for p in conn.execute("SELECT * FROM projects WHERE event_id = ? AND status = 'submitted' "
+                                      "ORDER BY id", (eid,))]
+    scores = []
+    for r in conn.execute("SELECT r.id, r.judge_id, r.project_id, r.comment FROM reviews r JOIN projects p "
+                          "ON p.id = r.project_id WHERE p.event_id = ? ORDER BY r.id", (eid,)):
+        crit = {c["criterion"]: c["value"] for c in
+                conn.execute("SELECT criterion, value FROM review_scores WHERE review_id = ?", (r["id"],))}
+        scores.append({"judge": r["judge_id"], "project": r["project_id"], "criteria": crit, "comment": r["comment"]})
+    out = {
+        "event": {"id": eid, "name": ev["name"], "submissions_close": ev["submissions_close"],
+                  "judging_close": ev["judging_close"], "voting_open": ev["voting_open"],
+                  "voting_close": ev["voting_close"], "votes_per_voter": ev["votes_per_voter"],
+                  "prizes": ev["prizes"]},
+        "tracks": tracks, "judges": judges, "teams": teams, "projects": projects, "scores": scores,
+        "rubric": [{"name": r["name"], "weight": r["weight"]} for r in
+                   conn.execute("SELECT name, weight FROM criteria WHERE event_id = ? ORDER BY position, name", (eid,))],
+        "exclusions": [dict(r) for r in conn.execute(
+            "SELECT x.judge_id, x.reason, x.at FROM judge_exclusions x JOIN judges j ON j.id = x.judge_id "
+            "WHERE j.event_id = ?", (eid,))],
+        "comments": [dict(r) for r in conn.execute(
+            "SELECT c.project_id AS project, u.email AS author, c.body, c.created_at FROM comments c "
+            "JOIN users u ON u.id = c.user_id JOIN projects p ON p.id = c.project_id "
+            "WHERE p.event_id = ? AND c.deleted_at IS NULL ORDER BY c.id", (eid,))],
+    }
+    if voting_closed:  # tallies stay hidden until the window closes, exports included
+        out["votes"] = [dict(r) for r in conn.execute(
+            "SELECT u.email AS voter, v.project_id AS project, v.at FROM votes v JOIN users u ON u.id = v.user_id "
+            "WHERE v.event_id = ? ORDER BY v.at", (eid,))]
+    return out
+
+
+def apply_import_extras(conn, event_id: str, data: dict, actor: Actor, now: datetime) -> None:
+    """Rubric weights, exclusions, event settings and the importing admin as organizer."""
+    from . import db as _db  # local import: db imports nothing from here, avoids a cycle at module load
+    ev = data.get("event") or {}
+    stamp = format_utc(now)
+    with _db.transaction(conn):
+        conn.execute("INSERT OR IGNORE INTO organizers VALUES (?, ?)", (event_id, actor.user_id))
+        for key in ("judging_close", "voting_open", "voting_close"):
+            if isinstance(ev.get(key), str) and ev[key]:
+                try:
+                    conn.execute(f"UPDATE events SET {key} = ? WHERE id = ?",  # key from a fixed tuple
+                                 (format_utc(parse_utc(ev[key])), event_id))
+                except ValueError:
+                    pass
+        if isinstance(ev.get("prizes"), str):
+            conn.execute("UPDATE events SET prizes = ? WHERE id = ?", (ev["prizes"][:2000], event_id))
+        vpv = ev.get("votes_per_voter")
+        if isinstance(vpv, int) and not isinstance(vpv, bool) and 1 <= vpv <= 100:
+            conn.execute("UPDATE events SET votes_per_voter = ? WHERE id = ?", (vpv, event_id))
+        for pos, c in enumerate(data.get("rubric") or []):
+            if isinstance(c, dict) and isinstance(c.get("name"), str):
+                w = c.get("weight")
+                if isinstance(w, (int, float)) and not isinstance(w, bool) and 0 < w <= 1000:
+                    conn.execute("UPDATE criteria SET weight = ?, position = ? WHERE event_id = ? AND name = ?",
+                                 (float(w), pos, event_id, c["name"]))
+        for x in data.get("exclusions") or []:
+            if isinstance(x, dict) and isinstance(x.get("judge_id"), str) and isinstance(x.get("reason"), str) \
+                    and x["reason"].strip() and conn.execute(
+                        "SELECT 1 FROM judges WHERE id = ? AND event_id = ?", (x["judge_id"], event_id)).fetchone():
+                conn.execute("INSERT OR IGNORE INTO judge_exclusions VALUES (?, ?, ?, ?)",
+                             (x["judge_id"], x["reason"][:1000], actor.user_id, stamp))
+        audit(conn, actor, event_id, "event.import", event_id)

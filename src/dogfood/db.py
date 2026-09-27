@@ -21,6 +21,7 @@ ADDED_COLUMNS = [
     ("events", "voting_open", "TEXT"),
     ("events", "voting_close", "TEXT"),
     ("events", "votes_per_voter", "INTEGER NOT NULL DEFAULT 1 CHECK (votes_per_voter >= 1)"),
+    ("events", "voting_closed_sent", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
