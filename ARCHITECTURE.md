@@ -18,8 +18,18 @@ browser / curl / run.py
         assignment.py judge -> project          │
         csvexport.py results CSV                │
         importer.py  fixtures.json -> db        │
+        confidence.py prize-line resampling     │
+        agreement.py judge agreement            │
+        public.py    voting window, ballots     │
+        ratelimit.py sliding windows            │
+        records.py   Ed25519 signing            │
+        webhooks.py  payloads + HMAC            │
                │                               ▼
                └──────────────────────► SQLite (/data/dogfood.db, WAL)
+                                               ▲
+          src/dogfood/webhook_worker.py ───────┘  background thread, own connection:
+          webhook deliveries (8 in parallel, retries 10/60/300 s), voting.closed,
+          hourly cleanup of expired sessions and set-password links
 ```
 
 ## Decisions
@@ -55,6 +65,24 @@ creates four fixed tokens and demo passwords so the acceptance checker and the
 demo video work out of the box. Without it, those tokens are deleted at boot.
 Turn it off for a real event.
 
+**Limits.** Bodies over 1 MiB (32 MiB for `/api/v1/import`) get 413 before any
+handler reads them. Votes, comments and failed logins are rate limited in
+memory (`core/ratelimit.py`; failed logins per email+IP, per email and per IP,
+so a stranger cannot lock the owner out). A restart clears the counters;
+`DOGFOOD_RATE_LIMITS=off` exists for load tests only.
+
+**Caching.** `services.analysis` (ranking, prize-line confidence, agreement,
+shrunk ranks) is memoized on its exact inputs; any new score, weight or
+exclusion is a different key, so the cache can never serve stale results.
+
+**Which event.** API routes take `?event=` (default: the first event). Pages
+also remember the last event a browser picked (an `event` cookie), so links
+without `?event=` stay in that event.
+
+**API documentation.** `/openapi.json` is FastAPI's spec enriched by
+`openapi_docs.py` with every request body and status code, because one handler
+serves both an HTML form and its `/api/v1` twin and reads the raw body.
+
 ## Stage logging
 
 Each stage boundary writes one JSON log line to stderr: `auth` (token source
@@ -68,8 +96,12 @@ first 4 characters.
 
 1. Create `/data` and a persistent secret (`/data/secret`) on first run.
 2. Apply the schema (`CREATE TABLE IF NOT EXISTS`).
-3. If the fixture event is not in the database, import `fixtures.json` in one
-   transaction and record the import in the audit log.
-4. In demo mode, create the demo organizer and the four demo sessions, and
+3. Apply column migrations (`db.migrate`), then load or create the Ed25519
+   signing key (`/data/signing_key`, 0600; a loud warning if records exist but
+   the key had to be regenerated).
+4. If the fixture event is not in the database, import `fixtures.json` in one
+   transaction and record the import in the audit log (`DOGFOOD_FIXTURES=none`
+   skips this and starts an empty portal).
+5. In demo mode, create the demo organizer and the four demo sessions, and
    print the headers for `.dogfood.toml`.
-5. Serve on port 8080. `/healthz` backs the Docker healthcheck.
+6. Start the webhook worker thread and serve on port 8080. `/healthz` backs the Docker healthcheck.
