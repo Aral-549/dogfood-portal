@@ -2,6 +2,7 @@
 {% block title %}Results{% endblock %}
 {% block content %}
 <h1>Results</h1>
+{% if voting_closed %}<p>The community vote is a separate result: <a href="/vote?event={{ event.id }}">People's choice</a>.</p>{% endif %}
 {% if excluded_count %}<p class="muted">Reviews from {{ excluded_count }} judge{{ "" if excluded_count == 1 else "s" }} were excluded by the organizer.</p>{% endif %}
 <div class="table-wrap"><table>
 <tr><th>Rank</th><th>Project</th><th>Team</th><th>Track</th><th>Reviews</th></tr>

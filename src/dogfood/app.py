@@ -336,7 +336,8 @@ def public_results(request: Request):
     excluded = conn_of(request).execute(
         "SELECT COUNT(*) FROM judge_exclusions x JOIN judges j ON j.id = x.judge_id WHERE j.event_id = ? "
         "AND EXISTS (SELECT 1 FROM reviews r WHERE r.judge_id = x.judge_id)", (ev["id"],)).fetchone()[0]
-    return render(request, "results.html", {"results": res, "meta": meta, "excluded_count": excluded})
+    return render(request, "results.html", {"results": res, "meta": meta, "excluded_count": excluded,
+                                            "voting_closed": _vstate(ev, request.state.now) == "closed"})
 
 
 # --- accounts --------------------------------------------------------------------------
