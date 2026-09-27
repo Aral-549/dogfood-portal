@@ -101,3 +101,24 @@ def test_upgrade_from_t2_volume(tmp_path):
     conn.close()
     assert {"voting_open", "voting_close", "votes_per_voter", "voting_closed_sent"} <= cols["events"]
     assert "email_norm" in cols["users"] and "revoked_at" in cols["records"] and "last_used_at" in cols["sessions"]
+
+
+def test_judge_page_never_preselects_a_score(tmp_path):
+    import re
+    from conftest import JUDGE_A
+    with portal(tmp_path) as c:
+        assert c.post("/api/v1/assignments/auto", json={"k": 6}, headers=ORGANIZER).status_code == 303
+        page = c.get("/judge", headers=JUDGE_A).text
+        forms = re.findall(r'<section class="card">.*?</section>', page, re.S)
+        todo = [f for f in forms if "to do" in f]
+        assert todo, "fixture judge has unscored assignments"
+        for f in todo:
+            assert f.count('<option value="" selected disabled>-</option>') == 3      # one per criterion
+            assert "<option selected>" not in f
+        scored = [f for f in forms if ">scored<" in f]
+        assert all(f.count("<option selected>") == 3 for f in scored)
+        assert page.index("to do") < page.index(">scored<")                            # to do first
+        assert re.search(r"\d+ of \d+ scored", page)
+        # and an untouched form is refused rather than stored as 1s
+        pid = re.search(r'action="/judge/projects/([^"]+)"', todo[0]).group(1)
+        assert c.post(f"/judge/projects/{pid}", data={"comment": "oops"}, headers=JUDGE_A).status_code == 422

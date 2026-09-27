@@ -758,7 +758,7 @@ def judge_home(request: Request):
     assigned = conn.execute(
         "SELECT p.id, p.title, p.summary, p.repo_url, r.id AS review_id, r.comment FROM assignments a "
         "JOIN projects p ON p.id = a.project_id LEFT JOIN reviews r ON r.judge_id = a.judge_id AND r.project_id = p.id "
-        "WHERE a.judge_id = ? ORDER BY p.id", (jid,)).fetchall()
+        "WHERE a.judge_id = ? ORDER BY r.id IS NOT NULL, p.id", (jid,)).fetchall()  # still to score first
     mine = {s["project"]: s["criteria"] for s in svc.judge_scores(conn, jid)}
     return render(request, "judge.html", {"assigned": assigned, "mine": mine, "rubric": svc.rubric(conn, ev["id"]),
                                           "judging_open": svc.judging_open(ev, request.state.now)})

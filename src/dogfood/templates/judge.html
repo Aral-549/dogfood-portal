@@ -2,15 +2,17 @@
 {% block title %}Judging{% endblock %}
 {% block content %}
 <h1>Your assigned projects</h1>
-<p class="muted">You see only your own scores. {{ "Judging is open." if judging_open else "Judging is closed." }}</p>
+<p class="muted">You see only your own scores. {{ "Judging is open." if judging_open else "Judging is closed." }}
+  {% set done = assigned|selectattr("id", "in", mine)|list|length %}{{ done }} of {{ assigned|length }} scored.</p>
 {% for a in assigned %}
 <section class="card">
   <h3>{{ a.title }} <span class="flag">{{ "scored" if a.id in mine else "to do" }}</span></h3>
   <p>{{ a.summary }}</p>
+  <p class="muted"><a href="/projects/{{ a.id }}">Project page</a>{% if a.repo_url %} &middot; <a href="{{ a.repo_url }}" rel="nofollow noopener" target="_blank">Repository</a>{% endif %}</p>
   {% if judging_open %}
   <form method="post" action="/judge/projects/{{ a.id }}" class="row">
     {% for name in rubric %}
-      <label>{{ name }} <select name="{{ name }}">{% for v in range(1, 6) %}<option {% if mine.get(a.id, {}).get(name) == v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+      <label>{{ name }} <select name="{{ name }}" required>{% set cur = mine.get(a.id, {}).get(name) %}{% if cur is none %}<option value="" selected disabled>-</option>{% endif %}{% for v in range(1, 6) %}<option {% if cur == v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
     {% endfor %}
     <input name="comment" placeholder="Comment" value="{{ a.comment or '' }}" maxlength="4000">
     <button>Save score</button>
