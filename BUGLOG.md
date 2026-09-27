@@ -168,8 +168,8 @@ Entries below come from the 2026-09-27 adversarial pass. Regression cases are in
 - **Symptom:** inviting a fixture participant's email as a judge issued a set-password link the organizer could use themselves, then submit as that team.
 - **Root cause:** without email delivery the organizer carries set-password links by hand, so any password-less account was claimable by them. Decision (2026-09-27): team members never get a set-password link; judges who are not participants still do.
 - **Stage/module:** lifecycle / auth (`services.create_password_link`)
-- **Regression case added:** pending (fourth verification pass)
-- **Status:** fixed, regression case pending
+- **Regression case added:** `tests/golden/test_regressions_4.py`
+- **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-24 excluded judge without reviews invisible on the dashboard, but counted publicly
 - **Symptom:** excluding a freshly invited judge (no reviews) left no row or re-include button on /organizer, while /results said "Reviews from 1 judge were excluded".
@@ -189,12 +189,26 @@ Entries below come from the 2026-09-27 adversarial pass. Regression cases are in
 - **Symptom:** (found by reading) r = -0.3004 would print as -0.300 yet be flagged outlier.
 - **Root cause:** status compared the unrounded r. Now it compares the 3 dp value shown.
 - **Stage/module:** core/agreement
-- **Regression case added:** pending (fourth verification pass; no exact boundary input found yet)
-- **Status:** fixed, regression case pending
+- **Regression case added:** `tests/golden/test_regressions_4.py`
+- **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-27 logins block the whole server
 - **Symptom:** 40 concurrent logins pushed /healthz from 2 ms to 0.81 s.
 - **Root cause:** scrypt ran on the async event loop in login, register and set-password. Now it runs in the threadpool.
 - **Stage/module:** HTTP handlers
-- **Regression case added:** pending (fourth verification pass)
-- **Status:** fixed, regression case pending
+- **Regression case added:** `tests/golden/test_regressions_4.py`
+- **Status:** fixed (regression case passes)
+
+## 2026-09-27 -- BUG-28 set-password link issued before the BUG-23 fix still claims a participant
+- **Symptom:** a `password_links` row for a team member, created before BUG-23 was fixed, still set that participant's password when used (up to 7 days).
+- **Root cause:** the team-member rule was only checked when a link was issued, not when it was used.
+- **Stage/module:** lifecycle / auth (`services.consume_password_link`)
+- **Regression case added:** `tests/golden/test_regressions_4.py` -- `test_bug23_link_issued_before_the_fix_cannot_claim_a_participant`
+- **Status:** fixed (regression case passes)
+
+## 2026-09-27 -- BUG-29 organizer page described the old outlier rule
+- **Symptom:** the judge-agreement section said "below 0 over 3+ shared projects" after the rule became below -0.3 over 4+.
+- **Root cause:** template text not updated with the contract amendment.
+- **Stage/module:** organizer template
+- **Regression case added:** `tests/golden/test_regressions_4.py` -- `test_bug26_dashboard_states_the_amended_outlier_rule`
+- **Status:** fixed (regression case passes)

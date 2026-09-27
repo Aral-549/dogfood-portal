@@ -80,7 +80,7 @@
 <section class="card">
   <h2>Judge agreement</h2>
   <p class="muted">Each judge's normalized scores against the other judges on the same projects (leave-one-out).
-    Outlier: agreement below 0 over 3+ shared projects. Nothing is excluded automatically.</p>
+    Outlier: agreement below -0.3 over 4+ shared projects. Nothing is excluded automatically.</p>
   {% if favoritism %}
   <p><strong>Possible favoritism</strong> (a review 2+ standard units above the project's other judges):
     {% for f in favoritism %}{{ f.judge }} on {{ f.project }} (+{{ "%.2f"|format(f.gap) }}){% if not loop.last %}, {% endif %}{% endfor %}</p>

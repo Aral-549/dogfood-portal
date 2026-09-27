@@ -99,6 +99,9 @@ def consume_password_link(conn, token: str, password: str) -> str | None:
     if row is None or parse_utc(row["expires_at"]) <= utcnow():
         return None
     conn.execute("DELETE FROM password_links WHERE token_hash = ?", (_token_hash(token),))
+    # Re-checked on use, so a link issued before this rule existed cannot claim a participant (BUG-28).
+    if conn.execute("SELECT 1 FROM team_members WHERE user_id = ?", (row["user_id"],)).fetchone():
+        return None
     # Only sets a first password: a link can never overwrite one the user already chose.
     updated = conn.execute("UPDATE users SET password_hash = ? WHERE id = ? AND password_hash IS NULL",
                            (hash_password(password), row["user_id"])).rowcount
