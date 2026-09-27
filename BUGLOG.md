@@ -212,3 +212,10 @@ Entries below come from the 2026-09-27 adversarial pass. Regression cases are in
 - **Stage/module:** organizer template
 - **Regression case added:** `tests/golden/test_regressions_4.py` -- `test_bug26_dashboard_states_the_amended_outlier_rule`
 - **Status:** fixed (regression case passes)
+
+## 2026-09-27 -- BUG-30 bulk import could rewrite another event's projects
+- **Symptom:** `POST /api/v1/import` of a file with a new event id but a project, team or track id already used by another event returned 201 and overwrote that event's titles and names (reproduced: evt_01's prj_01 renamed "HIJACKED").
+- **Root cause:** the route reuses the boot importer, which upserts by id so boot re-imports stay idempotent. The route's `IntegrityError -> 409` never fired because upserts never raise.
+- **Stage/module:** T4 import route (`app.import_event`)
+- **Regression case added:** `tests/golden/test_t4.py` -- `test_api_case12_13_import_conflict_malformed_and_authz`
+- **Status:** fixed (409 `ids_in_use` before anything is written; regression case passes)

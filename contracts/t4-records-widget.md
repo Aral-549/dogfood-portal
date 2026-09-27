@@ -51,5 +51,5 @@ Judge record: `{type: "judge", record_id, event_id, event_name, judge_id, name, 
 ## Status
 - [x] Drafted
 - [x] Reviewed by a human (approved 2026-09-27)
-- [ ] Implementation matches this contract
-- [ ] Golden tests exist for every behavior case above
+- [x] Implementation matches this contract
+- [x] Golden tests exist for every behavior case above

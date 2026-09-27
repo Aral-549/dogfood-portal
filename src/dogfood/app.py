@@ -1479,6 +1479,20 @@ def export_event(request: Request, event_id: str):
     return JSONResponse(body, headers={"Content-Disposition": f'attachment; filename="{event_id}.json"'})
 
 
+def _foreign_ids(conn, data: dict, event_id) -> list[str]:
+    """Ids in the file that already belong to some other event (tables keyed by global id)."""
+    taken = []
+    for key, table in (("tracks", "tracks"), ("judges", "judges"), ("teams", "teams"), ("projects", "projects")):
+        rows = data.get(key) if isinstance(data, dict) else None
+        for row in rows if isinstance(rows, list) else []:
+            rid = row.get("id") if isinstance(row, dict) else None
+            if isinstance(rid, str) and rid.strip():
+                hit = conn.execute(f"SELECT event_id FROM {table} WHERE id = ?", (rid,)).fetchone()  # fixed table
+                if hit and hit["event_id"] != event_id:
+                    taken.append(f"{key}:{rid}")
+    return taken
+
+
 @app.post("/api/v1/import")
 async def import_event(request: Request):
     actor = actor_of(request)
@@ -1490,6 +1504,12 @@ async def import_event(request: Request):
     event = data.get("event") if isinstance(data, dict) else None
     if isinstance(event, dict) and isinstance(event.get("id"), str) and svc.get_event(conn, event["id"]):
         return JSONResponse({"error": "event_exists", "event": event["id"]}, status_code=409)
+    # The importer upserts by id (boot re-imports are idempotent), so ids owned by another event
+    # would silently rewrite that event's rows. Refuse before anything is written.
+    valid_event = isinstance(event, dict) and isinstance(event.get("id"), str) and event["id"].strip()
+    taken = _foreign_ids(conn, data, event["id"]) if valid_event else []  # else the importer answers 422
+    if taken:
+        return JSONResponse({"error": "ids_in_use", "ids": taken[:50]}, status_code=409)
     try:
         report = importer.import_fixtures(conn, data, request.state.now, boot.invite_secret())
     except importer.FixtureError as e:

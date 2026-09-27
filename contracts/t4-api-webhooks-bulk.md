@@ -52,5 +52,5 @@ moved in and out of the portal. Authorization is unchanged: every API route asks
 ## Status
 - [x] Drafted
 - [x] Reviewed by a human (approved 2026-09-27)
-- [ ] Implementation matches this contract
-- [ ] Golden tests exist for every behavior case above
+- [x] Implementation matches this contract
+- [x] Golden tests exist for every behavior case above

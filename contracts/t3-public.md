@@ -66,5 +66,5 @@ separate result ("People's choice"). Authorization goes through `core/authz`.
 ## Status
 - [x] Drafted
 - [x] Reviewed by a human (approved 2026-09-27)
-- [ ] Implementation matches this contract
-- [ ] Golden tests exist for every behavior case above
+- [x] Implementation matches this contract (case 19 makes two frozen BUG-27 tests in test_regressions_4.py fail; awaiting a human decision)
+- [x] Golden tests exist for every behavior case above
