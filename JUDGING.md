@@ -117,6 +117,10 @@ shows raw rank, normalized rank and the change side by side for every project.
   Shrinking each judge's `mu`/`sd` toward the global values by review count
   would be more robust. We chose not to, to keep the method explainable in
   one paragraph. This is the first thing we would change.
+- **Two-review judges are all-or-nothing.** A judge with exactly 2 reviews always
+  produces z = -1 and +1 on each criterion where the scores differ: a 4-vs-5 judge
+  moves the ranking as much as a 1-vs-5 judge. Shrinkage (or a floor on `sd`)
+  would soften this. It is the same fix as the small-sample point above.
 - **Track confounding.** Judges mostly cover one track. A judge who only saw
   strong projects looks "harsh" and has their good scores pulled down. With
   the fixture's assignment we cannot separate judge harshness from track

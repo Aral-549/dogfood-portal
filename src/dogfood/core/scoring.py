@@ -4,7 +4,7 @@ Pure functions: no database, no clock.
 """
 
 from dataclasses import dataclass
-from math import sqrt
+from math import isfinite, sqrt
 from typing import Iterable, Mapping
 
 MIN_INFORMATIVE_REVIEWS = 2
@@ -32,10 +32,13 @@ def normalize_weights(criteria: Mapping[str, float]) -> dict[str, float]:
     if not criteria:
         raise ValueError("rubric has no criteria")
     for name, w in criteria.items():
-        if isinstance(w, bool) or not isinstance(w, (int, float)) or not w > 0:
+        if isinstance(w, bool) or not isinstance(w, (int, float)) or not w > 0 or not isfinite(w):
             raise ValueError(f"criterion {name!r} has invalid weight {w!r}")
-    total = float(sum(criteria.values()))
-    return {name: w / total for name, w in criteria.items()}
+    # Scale by the largest weight first so huge (finite) weights cannot overflow the sum.
+    scale = float(max(criteria.values()))
+    scaled = {name: w / scale for name, w in criteria.items()}
+    total = sum(scaled.values())
+    return {name: w / total for name, w in scaled.items()}
 
 
 def effective_reviews(reviews: Iterable[Review], superseded_by: Mapping[str, str]) -> list[Review]:

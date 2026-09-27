@@ -75,5 +75,8 @@ event.
 - Normalization uses plain per-judge z-scores, with no shrinkage for judges
   who scored few projects. See `JUDGING.md`, "Known limits".
 - No eligibility rules beyond "submitted, not superseded, before the deadline".
-- No password reset for participants, and no rate limiting on login.
+- No password reset, and no rate limiting on login. The 91 fixture participants have no
+  password; only the demo participant can log in. (Judges get a set-password link
+  from the organizer; it only works for accounts that have no password yet.)
+- `/docs` (Swagger UI) is disabled because it loads from a CDN; the schema is at `/openapi.json`.
 - T3 (public voting) and T4 (API/webhooks/certificates) are not implemented.

@@ -41,7 +41,7 @@ pass the check dishonestly. See `authz.md` cases 8-10.
 | 1 | `GET /projects`, no auth | 200 | T1 gallery is public |
 | 2 | same body | contains at least one of `Glass Signal`, `Small Meadow`, `Deep Compass` (case-insensitive) | first 3 fixture titles; must be on page one |
 | 3 | `POST /api/projects` as participant, JSON `{"title":"dogfood-late-submission-probe","summary":"probe"}` | 403 with reason `submissions_closed` | refused because of the deadline, not because of auth or validation (see `submissions.md` case 4) |
-| 4 | `GET /api/judge/scores` as judge_a | 200, JSON list of jdg_24's 11 scores only | |
+| 4 | `GET /api/judge/scores` as judge_a | 200, JSON object `{"judge": "jdg_24", "scores": [...]}` with jdg_24's 11 scores only | amended 2026-09-27: was "JSON list"; the object shape is what 9 other golden tests pin. `test_case4_body_is_a_json_list` awaits a human decision (rule 3) |
 | 5 | `GET /api/judges/jdg_24/scores` as judge_b | 403 | the important one |
 | 6 | `GET /api/judge/scores` as participant | 403 | |
 | 7 | `GET /api/export.csv` as organizer | 200, first line is a comma-separated header | |

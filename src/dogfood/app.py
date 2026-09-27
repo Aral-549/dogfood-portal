@@ -23,17 +23,20 @@ from .core.timeutil import format_utc, parse_utc
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 SESSION_COOKIE = "session"
 UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
+MAX_WEIGHT = 1000.0
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logs.setup(os.environ.get("DOGFOOD_LOG_LEVEL", "INFO"))
-    app.state.conn = boot.boot()
+    previous = getattr(app.state, "conn", None)  # nested lifespans (e.g. two test clients) must not clobber
+    conn = app.state.conn = boot.boot()
     yield
-    app.state.conn.close()
+    conn.close()
+    app.state.conn = previous
 
 
-app = FastAPI(title="DOGFOOD portal", lifespan=lifespan)
+app = FastAPI(title="DOGFOOD portal", lifespan=lifespan, docs_url=None, redoc_url=None)
 
 
 # --- request plumbing ------------------------------------------------------------
@@ -47,6 +50,12 @@ async def request_context(request: Request, call_next):
     token, source = authz.extract_token(request.headers.get("authorization"), request.cookies.get(SESSION_COOKIE))
     actor = svc.load_actor(conn, token, now)
     request.state.actor, request.state.token, request.state.now = actor, token, now
+    request.state.token_source = source
+    if source == "bearer" and request.cookies.get(SESSION_COOKIE):
+        cookie_actor = svc.load_actor(conn, request.cookies.get(SESSION_COOKIE), now)
+        if cookie_actor.user_id != actor.user_id:
+            logs.stage("auth", "credential_conflict", request_id=rid, bearer_user=actor.user_id,
+                       cookie_user=cookie_actor.user_id, used="bearer")
     logs.stage("auth", "actor", request_id=rid, method=request.method, path=request.url.path,
                token=logs.redact(token), source=source, user=actor.user_id)
     if request.method in UNSAFE and source == "cookie" and not _same_origin(request):
@@ -130,9 +139,14 @@ def healthz():
 
 def _page(raw: str | None) -> int:
     try:
-        return max(1, int(raw or 1))
+        return min(svc.MAX_PAGE, max(1, int(raw or 1)))
     except ValueError:
         return 1
+
+
+def password_of(data: dict) -> str:
+    value = data.get("password")
+    return value if isinstance(value, str) else ""
 
 
 @app.get("/projects", response_class=HTMLResponse)
@@ -176,7 +190,7 @@ def login_page(request: Request, next: str = "/me"):
 @app.post("/login")
 async def login(request: Request):
     data = await body_of(request)
-    email, password = clean(data.get("email"), 254).lower(), data.get("password") or ""
+    email, password = clean(data.get("email"), 254).lower(), password_of(data)
     nxt = data.get("next") or "/me"
     nxt = nxt if isinstance(nxt, str) and nxt.startswith("/") and not nxt.startswith("//") else "/me"
     conn = conn_of(request)
@@ -192,7 +206,7 @@ async def login(request: Request):
 
 @app.post("/logout")
 def logout(request: Request):
-    if request.state.token:
+    if request.state.token and request.state.token_source == "cookie":
         svc.delete_session(conn_of(request), request.state.token)
     resp = RedirectResponse("/projects", status_code=303)
     resp.delete_cookie(SESSION_COOKIE)
@@ -207,7 +221,7 @@ def register_page(request: Request):
 @app.post("/register")
 async def register(request: Request):
     data = await body_of(request)
-    email, name, password = clean(data.get("email"), 254).lower(), clean(data.get("name"), 100), data.get("password") or ""
+    email, name, password = clean(data.get("email"), 254).lower(), clean(data.get("name"), 100), password_of(data)
     if "@" not in email or len(password) < 8:
         return render(request, "register.html", {"error": "Valid email and a password of 8+ characters required."},
                       status=422)
@@ -231,8 +245,7 @@ def set_password_page(request: Request, token: str):
 
 @app.post("/set-password/{token}")
 async def set_password(request: Request, token: str):
-    data = await body_of(request)
-    password = data.get("password") or ""
+    password = password_of(await body_of(request))
     if len(password) < 8:
         return render(request, "set_password.html", {"token": token, "error": "8+ characters."}, status=422)
     uid = svc.consume_password_link(conn_of(request), token, password)
@@ -317,6 +330,13 @@ def join(request: Request, code: str):
 @app.get("/projects/new", response_class=HTMLResponse)
 def new_project_page(request: Request):
     ev = event_for(request)
+    if ev is None:
+        return render(request, "message.html", {"title": "No event", "message": "No event has been set up yet."},
+                      status=404)
+    decision, reason = authz.submit_project(actor_of(request), ev["id"],
+                                            submissions_open(svc.event_close(ev), request.state.now))
+    if not decision.allowed:
+        return deny(request, decision, reason)
     tracks = conn_of(request).execute("SELECT id, name FROM tracks WHERE event_id = ?", (ev["id"],)).fetchall() if ev else []
     return render(request, "project_form.html", {"p": None, "tracks": tracks})
 
@@ -465,14 +485,15 @@ def judge_home(request: Request):
 @app.post("/api/judge/scores/{project_id}")
 async def submit_score(request: Request, project_id: str):
     conn, actor = conn_of(request), actor_of(request)
-    p = conn.execute("SELECT event_id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    p = conn.execute("SELECT event_id, team_id FROM projects WHERE id = ?", (project_id,)).fetchone()
     if p is None:
         return deny(request, Decision.NOT_FOUND)
     ev = svc.get_event(conn, p["event_id"])
     jid = actor.judge_id(ev["id"])
     assigned = bool(jid) and conn.execute("SELECT 1 FROM assignments WHERE judge_id = ? AND project_id = ?",
                                           (jid, project_id)).fetchone() is not None
-    decision, reason = authz.score_project(actor, ev["id"], assigned, svc.judging_open(ev, request.state.now))
+    decision, reason = authz.score_project(actor, ev["id"], assigned, svc.judging_open(ev, request.state.now),
+                                           project_team_id=p["team_id"])
     if not decision.allowed:
         return deny(request, decision, reason)
     data = await body_of(request)
@@ -617,8 +638,9 @@ async def update_rubric(request: Request):
             w = float(data.get(f"w_{name}", current[name]))
         except (TypeError, ValueError):
             w = -1
-        if not w > 0 or w != w or w == float("inf"):
-            return JSONResponse({"error": "invalid", "detail": f"weight for {name} must be > 0"}, status_code=422)
+        if not 0 < w <= MAX_WEIGHT:
+            return JSONResponse({"error": "invalid", "detail": f"weight for {name} must be in (0, {MAX_WEIGHT:g}]"},
+                                status_code=422)
         new[name] = w
     for name, w in new.items():
         conn.execute("UPDATE criteria SET weight = ? WHERE event_id = ? AND name = ?", (w, ev["id"], name))
@@ -631,25 +653,36 @@ async def invite_judge(request: Request):
     ev, denied = _organizer_guard(request)
     if denied:
         return denied
-    data, conn = await body_of(request), conn_of(request)
+    data, conn, actor = await body_of(request), conn_of(request), actor_of(request)
     email = clean(data.get("email"), 254).lower()
     if "@" not in email:
         return JSONResponse({"error": "invalid", "detail": "email required"}, status_code=422)
-    uid = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
-    uid = uid["id"] if uid else "usr_" + secrets.token_hex(6)
-    conn.execute("INSERT OR IGNORE INTO users (id, email, name, created_at) VALUES (?, ?, ?, ?)",
-                 (uid, email, clean(data.get("name"), 100), format_utc(request.state.now)))
-    existing = conn.execute("SELECT id FROM judges WHERE event_id = ? AND user_id = ?", (ev["id"], uid)).fetchone()
-    jid = existing["id"] if existing else "jdg_" + secrets.token_hex(4)
-    if not existing:
-        conn.execute("INSERT INTO judges VALUES (?, ?, ?)", (jid, ev["id"], uid))
-    tracks = data.get("tracks") or ""
-    for tr in (tracks if isinstance(tracks, list) else str(tracks).split(",")):
-        if conn.execute("SELECT 1 FROM tracks WHERE id = ? AND event_id = ?", (tr.strip(), ev["id"])).fetchone():
-            conn.execute("INSERT OR IGNORE INTO judge_tracks VALUES (?, ?)", (jid, tr.strip()))
-    link = svc.create_password_link(conn, uid)
-    svc.audit(conn, actor_of(request), ev["id"], "judge.invite", jid, email=email)
-    return RedirectResponse(f"/organizer?event={ev['id']}&link=/set-password/{link}", status_code=303)
+    raw_tracks = data.get("tracks") or ""
+    raw_tracks = raw_tracks if isinstance(raw_tracks, list) else str(raw_tracks).split(",")
+    tracks = [t.strip() for t in raw_tracks if isinstance(t, str) and t.strip()]
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+        uid = row["id"] if row else "usr_" + secrets.token_hex(6)
+        if row is None:
+            conn.execute("INSERT INTO users (id, email, name, created_at) VALUES (?, ?, ?, ?)",
+                         (uid, email, clean(data.get("name"), 100), format_utc(request.state.now)))
+        existing = conn.execute("SELECT id FROM judges WHERE event_id = ? AND user_id = ?", (ev["id"], uid)).fetchone()
+        jid = existing["id"] if existing else "jdg_" + secrets.token_hex(4)
+        if not existing:
+            conn.execute("INSERT INTO judges VALUES (?, ?, ?)", (jid, ev["id"], uid))
+        for tr in tracks:
+            if conn.execute("SELECT 1 FROM tracks WHERE id = ? AND event_id = ?", (tr, ev["id"])).fetchone():
+                conn.execute("INSERT OR IGNORE INTO judge_tracks VALUES (?, ?)", (jid, tr))
+        # A set-password link only for accounts without a password; never a reset of an existing one.
+        link = svc.create_password_link(conn, uid)
+        svc.audit(conn, actor, ev["id"], "judge.invite", jid, email=email, tracks=tracks, link_issued=bool(link))
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    target = f"/organizer?event={ev['id']}"
+    return RedirectResponse(target + (f"&link=/set-password/{link}" if link else ""), status_code=303)
 
 
 @app.post("/organizer/assign")
@@ -660,7 +693,7 @@ async def run_assignment(request: Request):
     data, conn = await body_of(request), conn_of(request)
     try:
         k = max(1, min(10, int(data.get("k") or 3)))
-    except ValueError:
+    except (TypeError, ValueError):
         k = 3
     projects = [(r["id"], r["track_id"]) for r in conn.execute(
         "SELECT id, track_id FROM projects WHERE event_id = ? AND status = 'submitted' AND superseded_by IS NULL",

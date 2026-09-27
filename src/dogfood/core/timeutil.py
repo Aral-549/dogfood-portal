@@ -16,7 +16,10 @@ def parse_utc(value: str) -> datetime:
     dt = datetime.fromisoformat(text)
     if dt.tzinfo is None or dt.utcoffset() is None:
         raise ValueError(f"timestamp has no timezone: {value!r}")
-    return dt.astimezone(timezone.utc)
+    try:
+        return dt.astimezone(timezone.utc)
+    except OverflowError as e:
+        raise ValueError(f"timestamp out of range: {value!r}") from e
 
 
 def require_aware(dt: datetime, name: str = "datetime") -> datetime:

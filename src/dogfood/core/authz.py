@@ -49,9 +49,8 @@ VISITOR = Actor()
 def extract_token(authorization: str | None, session_cookie: str | None) -> tuple[str | None, str | None]:
     """Return (token, source). Bearer wins over the cookie when both are present."""
     if authorization is not None:
-        scheme, _, rest = authorization.strip().partition(" ")
-        token = rest.strip()
-        if scheme.lower() == "bearer" and token and " " not in token:
+        scheme, _, token = authorization.lstrip().partition(" ")
+        if scheme.lower() == "bearer" and token and token == token.strip() and " " not in token:
             return token, "bearer"
     if session_cookie is not None:
         token = session_cookie.strip()
@@ -116,11 +115,14 @@ def edit_project(actor: Actor, event_id: str, project_team_id: str, is_open: boo
     return Decision.ALLOW, None
 
 
-def score_project(actor: Actor, event_id: str, assigned: bool, judging_open: bool) -> tuple[Decision, str | None]:
+def score_project(actor: Actor, event_id: str, assigned: bool, judging_open: bool,
+                  project_team_id: str | None = None) -> tuple[Decision, str | None]:
     if (d := _require_login(actor)) is not None:
         return d, "unauthenticated"
     if actor.judge_id(event_id) is None:
         return Decision.FORBIDDEN, "not_a_judge"
+    if project_team_id is not None and actor.team_id(event_id) == project_team_id:
+        return Decision.FORBIDDEN, "conflict_of_interest"
     if not assigned:
         return Decision.FORBIDDEN, "not_assigned"
     if not judging_open:

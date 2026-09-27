@@ -14,6 +14,7 @@ from .core.authz import Actor
 from .core.timeutil import format_utc, parse_utc
 
 PAGE_SIZE = 50
+MAX_PAGE = 10_000
 MAX_TEAM_SIZE = 4
 
 
@@ -29,7 +30,9 @@ def hash_password(password: str) -> str:
     return f"scrypt${salt.hex()}${digest.hex()}"
 
 
-def check_password(password: str, stored: str | None) -> bool:
+def check_password(password, stored: str | None) -> bool:
+    if not isinstance(password, str):
+        password = ""
     if not stored or not stored.startswith("scrypt$"):
         # Burn comparable time so unknown users are not distinguishable by timing.
         hashlib.scrypt(password.encode(), salt=b"0" * 16, n=2**14, r=8, p=1)
@@ -74,7 +77,11 @@ def load_actor(conn, token: str | None, now: datetime) -> Actor:
                  judge_of=judge_of, team_of=team_of)
 
 
-def create_password_link(conn, user_id: str) -> str:
+def create_password_link(conn, user_id: str) -> str | None:
+    """One-time link for an account that has NO password yet. Never a reset of someone else's."""
+    row = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user_id,)).fetchone()
+    if row is None or row["password_hash"]:
+        return None
     token = secrets.token_urlsafe(24)
     conn.execute("INSERT INTO password_links VALUES (?, ?, ?)",
                  (_token_hash(token), user_id, format_utc(utcnow() + timedelta(days=7))))
@@ -86,8 +93,13 @@ def consume_password_link(conn, token: str, password: str) -> str | None:
                        (_token_hash(token),)).fetchone()
     if row is None or parse_utc(row["expires_at"]) <= utcnow():
         return None
-    conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(password), row["user_id"]))
     conn.execute("DELETE FROM password_links WHERE token_hash = ?", (_token_hash(token),))
+    # Only sets a first password: a link can never overwrite one the user already chose.
+    updated = conn.execute("UPDATE users SET password_hash = ? WHERE id = ? AND password_hash IS NULL",
+                           (hash_password(password), row["user_id"])).rowcount
+    if not updated:
+        return None
+    conn.execute("DELETE FROM sessions WHERE user_id = ? AND label != 'demo'", (row["user_id"],))
     return row["user_id"]
 
 
@@ -186,6 +198,9 @@ def results(conn, event_id: str) -> tuple[list[scoring.ProjectResult], dict[str,
     weights = rubric(conn, event_id)
     effective = scoring.effective_reviews(reviews.values(), superseded)
     complete = [r for r in effective if set(weights) <= set(r.criteria)]
+    dropped = {"merged_duplicates": len(reviews) - len(effective), "incomplete": len(effective) - len(complete)}
+    if any(dropped.values()):
+        logs.stage("scoring", "reviews_not_counted", event_id=event_id, **dropped)
     res = scoring.score(weights, complete, canonical) if weights else []
     meta = {p["id"]: {"title": p["title"], "team": p["team"], "track": p["track"],
                       "superseded_by": p["superseded_by"]} for p in projects}

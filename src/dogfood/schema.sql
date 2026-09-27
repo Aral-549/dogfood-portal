@@ -133,3 +133,8 @@ CREATE TABLE IF NOT EXISTS password_links (
     user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     expires_at TEXT NOT NULL
 );
+
+-- Accounts given a known password by demo mode; cleared when demo mode is off.
+CREATE TABLE IF NOT EXISTS demo_accounts (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE
+);

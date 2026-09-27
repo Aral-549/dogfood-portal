@@ -17,7 +17,10 @@ def safe_cell(value: str) -> str:
 
 
 def _num(x: float | None) -> str:
-    return "" if x is None else f"{x:.4f}"
+    if x is None:
+        return ""
+    text = f"{x:.4f}"
+    return "0.0000" if text == "-0.0000" else text
 
 
 def results_csv(results: Iterable[ProjectResult], meta: Mapping[str, Mapping[str, str]]) -> str:

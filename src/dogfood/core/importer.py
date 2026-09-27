@@ -49,6 +49,29 @@ def invite_code_for(team_id: str, secret: str) -> str:
     return hashlib.sha256(f"{secret}:{team_id}".encode()).hexdigest()[:16]
 
 
+def _s(value) -> str | None:
+    """A usable string reference, or None. Fixture values are untrusted."""
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _rubric_from(scores: list) -> list[str]:
+    """The criteria set used by the most score rows (ties: first seen), in first-seen key order.
+
+    Taking the union instead would let one misspelled or junk row poison every score.
+    """
+    counts: dict[frozenset, int] = {}
+    order: dict[frozenset, list[str]] = {}
+    for s in scores:
+        crit = s.get("criteria") if isinstance(s, dict) else None
+        if isinstance(crit, dict) and crit and all(isinstance(k, str) for k in crit):
+            key = frozenset(crit)
+            counts[key] = counts.get(key, 0) + 1
+            order.setdefault(key, list(crit))
+    if not counts:
+        return []
+    return order[max(counts, key=counts.get)]  # max keeps the first maximum in insertion order
+
+
 def _list(data: dict, key: str, report: ImportReport) -> list:
     value = data.get(key)
     if value is None:
@@ -96,23 +119,25 @@ def import_fixtures(conn: sqlite3.Connection, data: dict, now: datetime, invite_
         )
         track_ids = set()
         for t in tracks:
-            if not isinstance(t, dict) or not t.get("id"):
+            if not isinstance(t, dict) or not _s(t.get("id")):
                 report.reject("track", repr(t)[:60], "missing id")
                 continue
             conn.execute("INSERT INTO tracks (id, event_id, name) VALUES (?, ?, ?) "
-                         "ON CONFLICT(id) DO UPDATE SET name = excluded.name", (t["id"], ev, t.get("name", t["id"])))
+                         "ON CONFLICT(id) DO UPDATE SET name = excluded.name",
+                         (t["id"], ev, _s(t.get("name")) or t["id"]))
             track_ids.add(t["id"])
 
         judge_ids = set()
         for j in judges:
-            if not isinstance(j, dict) or not j.get("id") or not j.get("email"):
+            if not isinstance(j, dict) or not _s(j.get("id")) or not _s(j.get("email")):
                 report.reject("judge", repr(j)[:60], "missing id or email")
                 continue
-            uid = _ensure_user(conn, j["email"], j.get("name", ""), stamp)
+            uid = _ensure_user(conn, j["email"], _s(j.get("name")) or "", stamp)
             conn.execute("INSERT INTO judges (id, event_id, user_id) VALUES (?, ?, ?) "
                          "ON CONFLICT(id) DO NOTHING", (j["id"], ev, uid))
-            for tr in j.get("tracks") or []:
-                if tr in track_ids:
+            judge_tracks = j.get("tracks") if isinstance(j.get("tracks"), list) else []
+            for tr in judge_tracks:
+                if _s(tr) and tr in track_ids:
                     conn.execute("INSERT OR IGNORE INTO judge_tracks VALUES (?, ?)", (j["id"], tr))
                 else:
                     report.reject("judge_track", f"{j['id']}/{tr}", "unknown track")
@@ -120,14 +145,18 @@ def import_fixtures(conn: sqlite3.Connection, data: dict, now: datetime, invite_
 
         team_ids = set()
         for t in teams:
-            if not isinstance(t, dict) or not t.get("id"):
+            if not isinstance(t, dict) or not _s(t.get("id")):
                 report.reject("team", repr(t)[:60], "missing id")
                 continue
             conn.execute("INSERT INTO teams (id, event_id, name, invite_code) VALUES (?, ?, ?, ?) "
                          "ON CONFLICT(id) DO UPDATE SET name = excluded.name",
-                         (t["id"], ev, t.get("name", t["id"]), invite_code_for(t["id"], invite_secret)))
+                         (t["id"], ev, _s(t.get("name")) or t["id"], invite_code_for(t["id"], invite_secret)))
             team_ids.add(t["id"])
-            for email in t.get("members") or []:
+            members = t.get("members") if isinstance(t.get("members"), list) else []
+            for email in members:
+                if not _s(email):
+                    report.reject("team_member", f"{t['id']}/{email!r}"[:60], "member is not an email string")
+                    continue
                 uid = _ensure_user(conn, email, "", stamp)
                 existing = conn.execute("SELECT team_id FROM team_members WHERE event_id = ? AND user_id = ?",
                                         (ev, uid)).fetchone()
@@ -138,10 +167,10 @@ def import_fixtures(conn: sqlite3.Connection, data: dict, now: datetime, invite_
 
         project_rows = {}
         for p in projects:
-            if not isinstance(p, dict) or not p.get("id") or not p.get("title"):
+            if not isinstance(p, dict) or not _s(p.get("id")) or not _s(p.get("title")):
                 report.reject("project", repr(p)[:60], "missing id or title")
                 continue
-            if p.get("team") not in team_ids:
+            if not _s(p.get("team")) or p["team"] not in team_ids:
                 report.reject("project", p["id"], f"unknown team {p.get('team')!r}")
                 continue
             try:
@@ -149,25 +178,20 @@ def import_fixtures(conn: sqlite3.Connection, data: dict, now: datetime, invite_
             except ValueError as e:
                 report.reject("project", p["id"], f"submitted_at: {e}")
                 continue
-            track = p.get("track") if p.get("track") in track_ids else None
+            track = p["track"] if _s(p.get("track")) and p["track"] in track_ids else None
             conn.execute(
                 "INSERT INTO projects (id, event_id, team_id, track_id, title, summary, repo_url, status, "
                 "submitted_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET title = excluded.title, summary = excluded.summary, "
                 "repo_url = excluded.repo_url, track_id = excluded.track_id, submitted_at = excluded.submitted_at",
-                (p["id"], ev, p["team"], track, p["title"], p.get("summary", ""), p.get("repo_url", ""),
+                (p["id"], ev, p["team"], track, p["title"], _s(p.get("summary")) or "", _s(p.get("repo_url")) or "",
                  submitted, submitted, submitted),
             )
-            project_rows[p["id"]] = {**p, "submitted_at": submitted}
+            project_rows[p["id"]] = {**p, "submitted_at": submitted, "repo_url": _s(p.get("repo_url")) or ""}
 
         _flag_duplicates(conn, project_rows, report)
 
-        criteria_names: list[str] = []
-        for s in scores:
-            if isinstance(s, dict) and isinstance(s.get("criteria"), dict):
-                for name in s["criteria"]:
-                    if name not in criteria_names:
-                        criteria_names.append(name)
+        criteria_names = _rubric_from(scores)
         for pos, name in enumerate(criteria_names):
             conn.execute("INSERT OR IGNORE INTO criteria (event_id, name, weight, position) VALUES (?, ?, 1, ?)",
                          (ev, name, pos))
@@ -180,12 +204,12 @@ def import_fixtures(conn: sqlite3.Connection, data: dict, now: datetime, invite_
             if not isinstance(s, dict):
                 report.reject("score", ref, "not an object")
                 continue
-            judge, project, crit = s.get("judge"), s.get("project"), s.get("criteria")
-            if judge not in judge_ids:
-                report.reject("score", ref, f"unknown judge {judge!r}")
+            judge, project, crit = _s(s.get("judge")), _s(s.get("project")), s.get("criteria")
+            if judge is None or judge not in judge_ids:
+                report.reject("score", ref, f"unknown judge {s.get('judge')!r}"[:120])
                 continue
-            if project not in project_rows:
-                report.reject("score", ref, f"unknown project {project!r}")
+            if project is None or project not in project_rows:
+                report.reject("score", ref, f"unknown project {s.get('project')!r}"[:120])
                 continue
             if not isinstance(crit, dict) or set(rubric) - set(crit):
                 report.reject("score", ref, "missing rubric criteria")
@@ -202,7 +226,7 @@ def import_fixtures(conn: sqlite3.Connection, data: dict, now: datetime, invite_
             row = conn.execute(
                 "INSERT INTO reviews (judge_id, project_id, comment, updated_at) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(judge_id, project_id) DO UPDATE SET comment = excluded.comment RETURNING id",
-                (judge, project, s.get("comment") or "", stamp),
+                (judge, project, s.get("comment") if isinstance(s.get("comment"), str) else "", stamp),
             ).fetchone()
             conn.execute("DELETE FROM review_scores WHERE review_id = ?", (row["id"],))
             conn.executemany("INSERT INTO review_scores VALUES (?, ?, ?)",

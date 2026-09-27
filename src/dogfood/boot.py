@@ -37,8 +37,11 @@ def boot() -> sqlite3.Connection:
     fixtures = os.environ.get("DOGFOOD_FIXTURES", "fixtures.json")
     now = svc.utcnow()
     data = importer.load_file(fixtures)  # FixtureError aborts startup: never half-seeded
-    event_id = data["event"]["id"] if isinstance(data.get("event"), dict) else None
-    if event_id and svc.get_event(conn, event_id) is None:
+    event = data.get("event")
+    if not isinstance(event, dict) or not isinstance(event.get("id"), str) or not event["id"]:
+        raise importer.FixtureError(f"{fixtures}: 'event' with an 'id' is required")
+    event_id = event["id"]
+    if svc.get_event(conn, event_id) is None:
         report = importer.import_fixtures(conn, data, now, _secret(data_dir))
         svc.audit(conn, "system", event_id, "fixtures.import", fixtures, counts=report.counts,
                   duplicates=report.duplicates, rejected=report.rejected)
@@ -47,15 +50,29 @@ def boot() -> sqlite3.Connection:
     if os.environ.get("DOGFOOD_DEMO_SESSIONS") == "1":
         _demo_accounts(conn, event_id)
     else:
-        conn.execute("DELETE FROM sessions WHERE label = 'demo'")
+        _disable_demo(conn)
     return conn
+
+
+def _disable_demo(conn: sqlite3.Connection) -> None:
+    """Demo mode off: the known tokens AND the known passwords stop working."""
+    conn.execute("BEGIN IMMEDIATE")
+    conn.execute("DELETE FROM sessions WHERE label = 'demo'")
+    conn.execute("DELETE FROM sessions WHERE user_id IN (SELECT user_id FROM demo_accounts)")
+    conn.execute("UPDATE users SET password_hash = NULL WHERE id IN (SELECT user_id FROM demo_accounts)")
+    conn.execute("UPDATE users SET is_admin = 0 WHERE id = 'usr_demo_organizer'")
+    conn.execute("DELETE FROM organizers WHERE user_id = 'usr_demo_organizer'")
+    cleared = conn.execute("DELETE FROM demo_accounts").rowcount
+    conn.execute("COMMIT")
+    if cleared:
+        svc.audit(conn, "system", None, "demo.disable", accounts=cleared)
 
 
 def _demo_accounts(conn: sqlite3.Connection, event_id: str) -> None:
     stamp = format_utc(svc.utcnow())
     org_id = "usr_demo_organizer"
-    conn.execute("INSERT OR IGNORE INTO users (id, email, name, is_admin, created_at) VALUES (?, ?, ?, 1, ?)",
-                 (org_id, DEMO_ORGANIZER_EMAIL, "Demo Organizer", stamp))
+    conn.execute("INSERT INTO users (id, email, name, is_admin, created_at) VALUES (?, ?, ?, 1, ?) "
+                 "ON CONFLICT(id) DO UPDATE SET is_admin = 1", (org_id, DEMO_ORGANIZER_EMAIL, "Demo Organizer", stamp))
     conn.execute("INSERT OR IGNORE INTO organizers VALUES (?, ?)", (event_id, org_id))
     lines = []
     for role, (token, ref) in DEMO_ACCOUNTS.items():
@@ -68,6 +85,7 @@ def _demo_accounts(conn: sqlite3.Connection, event_id: str) -> None:
             continue
         conn.execute("UPDATE users SET password_hash = ? WHERE id = ?",
                      (svc.hash_password(DEMO_PASSWORD), row["user_id"]))
+        conn.execute("INSERT OR IGNORE INTO demo_accounts VALUES (?)", (row["user_id"],))
         svc.create_session(conn, row["user_id"], label="demo", token=token, ttl=None)
         email = conn.execute("SELECT email FROM users WHERE id = ?", (row["user_id"],)).fetchone()["email"]
         lines.append(f'{role:<11} = "Authorization: Bearer {token}"   # login: {email} / {DEMO_PASSWORD}')
