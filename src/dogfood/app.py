@@ -115,6 +115,19 @@ async def _too_large(send):
 app.add_middleware(BodyLimit)
 
 
+def _openapi():
+    if app.openapi_schema is None:
+        from fastapi.openapi.utils import get_openapi
+        from .openapi_docs import enrich
+        app.openapi_schema = enrich(get_openapi(title=app.title, version="1", routes=app.routes,
+                                                description="Scriptable DOGFOOD portal. Every route asks the same "
+                                                            "authorization as its HTML twin."))
+    return app.openapi_schema
+
+
+app.openapi = _openapi
+
+
 # --- request plumbing ------------------------------------------------------------
 
 @app.middleware("http")

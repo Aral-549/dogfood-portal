@@ -676,3 +676,26 @@ def test_widget_case12_script(tmp_path):
         assert "iframe" in js and "/embed/gallery" in js
         for banned in ("document.cookie", "fetch(", "XMLHttpRequest", "localStorage"):
             assert banned not in js
+
+
+# === OpenAPI (case 1: "with request/response schemas") ==========================================
+BODYLESS = {("post", "/api/v1/teams/leave"), ("post", "/api/v1/teams/invite"), ("post", "/api/v1/join/{code}"),
+            ("post", "/api/v1/judges/{judge_id}/include"), ("post", "/api/v1/voters/{user_id}/unvoid"),
+            ("post", "/api/v1/records/issue")}
+
+
+def test_openapi_documents_every_v1_body_and_outcome(tmp_path):
+    from dogfood.openapi_docs import OPS
+    with portal(tmp_path) as c:
+        spec = c.get("/openapi.json").json()
+    ops = {(m, p): op for p, item in spec["paths"].items() if p.startswith("/api/v1") for m, op in item.items()}
+    assert set(OPS) <= set(ops), set(OPS) - set(ops)                      # no docs for vanished routes
+    for (m, p), op in ops.items():
+        if m in ("post", "put") and (m, p) not in BODYLESS:
+            assert "requestBody" in op, (m, p)
+        assert any(s.startswith("2") or s == "303" for s in op["responses"]), (m, p)
+        assert all(isinstance(r["description"], str) for r in op["responses"].values()), (m, p)
+    assert [x["name"] for x in ops[("post", "/api/v1/votes")]["parameters"]] == ["event"]
+    vote = ops[("post", "/api/v1/votes")]["requestBody"]["content"]["application/json"]["schema"]
+    assert vote["required"] == ["project"]
+    assert "bearer" in spec["components"]["securitySchemes"]
