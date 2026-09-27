@@ -66,6 +66,54 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DOGFOOD portal", lifespan=lifespan, docs_url=None, redoc_url=None)
 
+MAX_BODY = 1 << 20            # 1 MiB for every form and JSON body ...
+MAX_IMPORT_BODY = 32 << 20    # ... except a whole event being imported
+
+
+class BodyLimit:
+    """413 for oversized bodies, declared (Content-Length) or streamed (chunked), before any
+    handler buffers them: without it, one large POST could exhaust the portal's memory."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        limit = MAX_IMPORT_BODY if scope["path"] == "/api/v1/import" else MAX_BODY
+        declared = dict(scope["headers"]).get(b"content-length")
+        if declared is not None and declared.isdigit() and int(declared) > limit:
+            return await _too_large(send)
+        seen = 0
+
+        async def limited():
+            nonlocal seen
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > limit:
+                    raise _BodyTooLarge()
+            return message
+
+        try:
+            await self.app(scope, limited, send)
+        except _BodyTooLarge:
+            await _too_large(send)
+
+
+class _BodyTooLarge(Exception):
+    pass
+
+
+async def _too_large(send):
+    body = b'{"error":"body_too_large"}'
+    await send({"type": "http.response.start", "status": 413,
+                "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
+
+
+app.add_middleware(BodyLimit)
+
 
 # --- request plumbing ------------------------------------------------------------
 
@@ -107,6 +155,9 @@ async def _handle(request: Request, call_next, conn: sqlite3.Connection, rid: st
     else:  # clickjacking protection everywhere except the embeddable widget
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # Set-password links carry their token in the path: never send it on to another site.
+    response.headers["Referrer-Policy"] = "same-origin"
     logs.stage("http", "response", request_id=rid, status=response.status_code)
     return response
 
@@ -292,7 +343,8 @@ async def login(request: Request):
     limits["login_fail"].reset(f"{email}|{ip}")  # the owner is back; their own typos are forgiven
     token = svc.create_session(conn, row["id"])
     resp = RedirectResponse(nxt, status_code=303)
-    resp.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=14 * 86400)
+    resp.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=14 * 86400,
+                    secure=request.url.scheme == "https")
     return resp
 
 
@@ -329,7 +381,8 @@ async def register(request: Request):
     _registration_flags(request, conn, uid, email)
     token = svc.create_session(conn, uid)
     resp = RedirectResponse("/me", status_code=303)
-    resp.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=14 * 86400)
+    resp.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=14 * 86400,
+                    secure=request.url.scheme == "https")
     return resp
 
 
