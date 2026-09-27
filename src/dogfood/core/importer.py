@@ -54,22 +54,27 @@ def _s(value) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
-def _rubric_from(scores: list) -> list[str]:
-    """The criteria set used by the most score rows (ties: first seen), in first-seen key order.
+def _rubric_from(scores: list, judge_ids: set, project_ids) -> tuple[list[str], bool]:
+    """(criteria set used by the most otherwise-valid score rows, tie?) in first-seen key order.
 
-    Taking the union instead would let one misspelled or junk row poison every score.
+    Only rows whose judge and project resolve get a vote, so rows rejected for other reasons
+    cannot outvote real scores. Taking the union would let one misspelled row poison every score.
     """
     counts: dict[frozenset, int] = {}
     order: dict[frozenset, list[str]] = {}
     for s in scores:
-        crit = s.get("criteria") if isinstance(s, dict) else None
+        if not isinstance(s, dict) or _s(s.get("judge")) not in judge_ids or _s(s.get("project")) not in project_ids:
+            continue
+        crit = s.get("criteria")
         if isinstance(crit, dict) and crit and all(isinstance(k, str) for k in crit):
             key = frozenset(crit)
             counts[key] = counts.get(key, 0) + 1
             order.setdefault(key, list(crit))
     if not counts:
-        return []
-    return order[max(counts, key=counts.get)]  # max keeps the first maximum in insertion order
+        return [], False
+    best = max(counts, key=counts.get)  # max keeps the first maximum in insertion order
+    tie = sum(1 for v in counts.values() if v == counts[best]) > 1
+    return order[best], tie
 
 
 def _list(data: dict, key: str, report: ImportReport) -> list:
@@ -97,8 +102,10 @@ def import_fixtures(conn: sqlite3.Connection, data: dict, now: datetime, invite_
     report = ImportReport()
     stamp = format_utc(now)
     event = data.get("event")
-    if not isinstance(event, dict) or not event.get("id"):
+    if not isinstance(event, dict) or not _s(event.get("id")):
         raise FixtureError("'event' with an 'id' is required")
+    if event.get("name") is not None and not isinstance(event.get("name"), str):
+        raise FixtureError("event.name must be a string")
     try:
         close = format_utc(parse_utc(event.get("submissions_close", "")))
     except ValueError as e:
@@ -191,7 +198,12 @@ def import_fixtures(conn: sqlite3.Connection, data: dict, now: datetime, invite_
 
         _flag_duplicates(conn, project_rows, report)
 
-        criteria_names = _rubric_from(scores)
+        criteria_names, tie = _rubric_from(scores, judge_ids, project_rows)
+        if tie:
+            report.notes.append(f"rubric: several criteria sets are equally common; chose {criteria_names}")
+        if scores and not criteria_names and not conn.execute(
+                "SELECT 1 FROM criteria WHERE event_id = ?", (ev,)).fetchone():
+            report.notes.append("rubric: no valid score row names any criteria; scores rejected")
         for pos, name in enumerate(criteria_names):
             conn.execute("INSERT OR IGNORE INTO criteria (event_id, name, weight, position) VALUES (?, ?, 1, ?)",
                          (ev, name, pos))
@@ -210,6 +222,9 @@ def import_fixtures(conn: sqlite3.Connection, data: dict, now: datetime, invite_
                 continue
             if project is None or project not in project_rows:
                 report.reject("score", ref, f"unknown project {s.get('project')!r}"[:120])
+                continue
+            if not rubric:
+                report.reject("score", ref, "event has no rubric")
                 continue
             if not isinstance(crit, dict) or set(rubric) - set(crit):
                 report.reject("score", ref, "missing rubric criteria")

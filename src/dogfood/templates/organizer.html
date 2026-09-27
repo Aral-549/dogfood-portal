@@ -44,10 +44,19 @@
 </section>
 
 <section class="card">
-  <h2>Ranking: raw vs normalized</h2>
+  <h2>Ranking: raw vs normalized, and how sure it is</h2>
+  <form method="get" action="/organizer" class="row">
+    <input type="hidden" name="event" value="{{ event.id }}">
+    <label>Prize places (k) <input name="k" value="{{ k }}" size="2"></label><button>Recompute</button>
+    {% if confidence %}<span class="muted">P(top {{ k }}) by {{ confidence.method.replace("_", " ") }} over {{ confidence.replicates }} resamples of each project's reviews. Advisory: the ranking itself does not change.</span>{% endif %}
+  </form>
+  <form method="post" action="/organizer/tiebreak?event={{ event.id }}" class="row">
+    <input type="hidden" name="k" value="{{ k }}"><button>Assign a tie-breaker judge to each close call</button>
+    <a href="/api/confidence.csv?event={{ event.id }}&k={{ k }}">Download confidence CSV</a>
+  </form>
   {% if duplicates %}<p class="muted">Merged duplicates: {% for old, new in duplicates %}{{ old }} into {{ new }}{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
   <div class="table-wrap"><table>
-    <tr><th>Rank</th><th>Raw rank</th><th>Change</th><th>Project</th><th>Reviews</th><th>Raw mean</th><th>z</th><th></th></tr>
+    <tr><th>Rank</th><th>Raw rank</th><th>Change</th><th>Project</th><th>Reviews</th><th>Raw mean</th><th>z</th><th>P(top {{ k }})</th><th></th></tr>
     {% for r in results %}
     {% set delta = r.raw_rank - r.rank %}
     <tr><td>{{ r.rank }}</td><td>{{ r.raw_rank }}</td>
@@ -55,7 +64,35 @@
       <td>{{ meta[r.project].title }} <span class="muted">{{ r.project }}</span></td><td>{{ r.n_reviews }}</td>
       <td>{{ "%.3f"|format(r.raw_mean) if r.raw_mean is not none else "" }}</td>
       <td>{{ "%.3f"|format(r.z) if r.z is not none else "" }}</td>
-      <td>{% if r.low_confidence %}<span class="flag">low confidence</span>{% endif %}</td></tr>
+      {% set c = confidence.projects[r.project] if confidence else none %}
+      <td>{{ "%.3f"|format(c.p_top_k) if c and not c.unreviewed else "" }}</td>
+      <td>{% if c and c.close_call %}<span class="flag">close call</span> {% endif %}{% if r.low_confidence %}<span class="flag">low confidence</span>{% endif %}</td></tr>
+    {% endfor %}
+  </table></div>
+</section>
+
+<section class="card">
+  <h2>Judge agreement</h2>
+  <p class="muted">Each judge's normalized scores against the other judges on the same projects (leave-one-out).
+    Outlier: agreement below 0 over 3+ shared projects. Nothing is excluded automatically.</p>
+  {% if favoritism %}
+  <p><strong>Possible favoritism</strong> (a review 2+ standard units above the project's other judges):
+    {% for f in favoritism %}{{ f.judge }} on {{ f.project }} (+{{ "%.2f"|format(f.gap) }}){% if not loop.last %}, {% endif %}{% endfor %}</p>
+  {% endif %}
+  <div class="table-wrap"><table>
+    <tr><th>Judge</th><th>Shared</th><th>Agreement</th><th>Mean abs. deviation</th><th>Status</th><th>Results</th></tr>
+    {% for a in agreement %}
+    <tr><td>{{ a.judge }}</td><td>{{ a.shared }}</td>
+      <td>{{ "%.3f"|format(a.agreement) if a.agreement is not none else "" }}</td>
+      <td>{{ "%.3f"|format(a.mean_abs_dev) if a.mean_abs_dev is not none else "" }}</td>
+      <td>{% if a.status != "ok" %}<span class="flag">{{ a.status }}</span>{% else %}ok{% endif %}</td>
+      <td>{% if a.judge in excluded %}
+          excluded: {{ excluded[a.judge].reason }}
+          <form class="inline" method="post" action="/organizer/judges/{{ a.judge }}/include?event={{ event.id }}"><button>Re-include</button></form>
+        {% else %}
+          <form class="inline" method="post" action="/organizer/judges/{{ a.judge }}/exclude?event={{ event.id }}">
+            <input name="reason" placeholder="reason (required, audited)" required maxlength="1000"><button>Exclude</button></form>
+        {% endif %}</td></tr>
     {% endfor %}
   </table></div>
 </section>

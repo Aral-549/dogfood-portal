@@ -68,7 +68,7 @@ Python. Alternative if preferred: Node/TypeScript + Postgres.
   real login + sessions are required for T1.
 - Normalization Proof bonus: show raw, normalized, and the ranking change.
 
-## Beyond the problem statement (drafted 2026-09-27, awaiting review)
+## Beyond the problem statement (approved 2026-09-27)
 
 - `confidence.md`: prize-line confidence (bootstrap P(top k)), close-call flags,
   tie-breaker judge assignment.

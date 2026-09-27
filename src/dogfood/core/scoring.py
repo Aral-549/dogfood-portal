@@ -71,10 +71,23 @@ def _mean_sd(values: list[float]) -> tuple[float, float]:
     return mu, sqrt(sum((v - mu) ** 2 for v in values) / len(values))
 
 
-def score(criteria: Mapping[str, float], reviews: Iterable[Review], projects: Iterable[str]) -> list[ProjectResult]:
+@dataclass(frozen=True)
+class ScoredReview:
+    """One review after normalization: raw weighted score r and weighted z."""
+    judge: str
+    project: str
+    r: float
+    z: float
+
+
+def score_reviews(criteria: Mapping[str, float], reviews: Iterable[Review],
+                  projects: Iterable[str]) -> tuple[list[ScoredReview], set[str]]:
+    """Per-review raw and normalized scores, plus the judges informative on >= 1 criterion.
+
+    Reviews of projects not in `projects` are ignored (callers log how many).
+    """
     weights = normalize_weights(criteria)
-    project_ids = list(dict.fromkeys(projects))
-    known = set(project_ids)
+    known = set(projects)
     reviews = [r for r in reviews if r.project in known]
     for r in reviews:
         missing = set(weights) - set(r.criteria)
@@ -90,21 +103,31 @@ def score(criteria: Mapping[str, float], reviews: Iterable[Review], projects: It
         for c in weights:
             mu, sd = _mean_sd([float(r.criteria[c]) for r in rs])
             stats[(judge, c)] = (mu, sd) if len(rs) >= MIN_INFORMATIVE_REVIEWS and sd > 0 else None
+    informative = {j for j in by_judge if any(stats[(j, c)] is not None for c in weights)}
 
-    raw: dict[str, list[float]] = {p: [] for p in project_ids}
-    zs: dict[str, list[float]] = {p: [] for p in project_ids}
-    informative: dict[str, int] = {p: 0 for p in project_ids}
+    scored = []
     for r in reviews:
-        raw[r.project].append(sum(w * r.criteria[c] for c, w in weights.items()))
-        z_r, any_info = 0.0, False
+        z_r = 0.0
         for c, w in weights.items():
             st = stats[(r.judge, c)]
             if st is not None:
                 mu, sd = st
                 z_r += w * (r.criteria[c] - mu) / sd
-                any_info = True
-        zs[r.project].append(z_r)
-        informative[r.project] += any_info
+        scored.append(ScoredReview(r.judge, r.project, sum(w * r.criteria[c] for c, w in weights.items()), z_r))
+    return scored, informative
+
+
+def score(criteria: Mapping[str, float], reviews: Iterable[Review], projects: Iterable[str]) -> list[ProjectResult]:
+    project_ids = list(dict.fromkeys(projects))
+    scored, informative_judges = score_reviews(criteria, reviews, project_ids)
+
+    raw: dict[str, list[float]] = {p: [] for p in project_ids}
+    zs: dict[str, list[float]] = {p: [] for p in project_ids}
+    informative: dict[str, int] = {p: 0 for p in project_ids}
+    for s in scored:
+        raw[s.project].append(s.r)
+        zs[s.project].append(s.z)
+        informative[s.project] += s.judge in informative_judges
 
     rows = []
     for p in project_ids:

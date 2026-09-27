@@ -2,6 +2,7 @@
 {% block title %}Results{% endblock %}
 {% block content %}
 <h1>Results</h1>
+{% if excluded_count %}<p class="muted">Reviews from {{ excluded_count }} judge{{ "" if excluded_count == 1 else "s" }} were excluded by the organizer.</p>{% endif %}
 <div class="table-wrap"><table>
 <tr><th>Rank</th><th>Project</th><th>Team</th><th>Track</th><th>Reviews</th></tr>
 {% for r in results %}<tr><td>{{ r.rank }}</td><td><a href="/projects/{{ r.project }}">{{ meta[r.project].title }}</a></td><td>{{ meta[r.project].team }}</td><td>{{ meta[r.project].track }}</td><td>{{ r.n_reviews }}</td></tr>{% endfor %}

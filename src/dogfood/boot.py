@@ -29,16 +29,20 @@ def _secret(data_dir: Path) -> str:
     return path.read_text().strip()
 
 
+def db_path() -> str:
+    return str(Path(os.environ.get("DOGFOOD_DATA", "data")) / "dogfood.db")
+
+
 def boot() -> sqlite3.Connection:
     data_dir = Path(os.environ.get("DOGFOOD_DATA", "data"))
     data_dir.mkdir(parents=True, exist_ok=True)
-    conn = db.connect(str(data_dir / "dogfood.db"))
+    conn = db.connect(db_path())
     db.init_schema(conn)
     fixtures = os.environ.get("DOGFOOD_FIXTURES", "fixtures.json")
     now = svc.utcnow()
     data = importer.load_file(fixtures)  # FixtureError aborts startup: never half-seeded
     event = data.get("event")
-    if not isinstance(event, dict) or not isinstance(event.get("id"), str) or not event["id"]:
+    if not isinstance(event, dict) or not isinstance(event.get("id"), str) or not event["id"].strip():
         raise importer.FixtureError(f"{fixtures}: 'event' with an 'id' is required")
     event_id = event["id"]
     if svc.get_event(conn, event_id) is None:
@@ -57,6 +61,9 @@ def boot() -> sqlite3.Connection:
 def _disable_demo(conn: sqlite3.Connection) -> None:
     """Demo mode off: the known tokens AND the known passwords stop working."""
     conn.execute("BEGIN IMMEDIATE")
+    # Volumes created before demo_accounts existed: every account holding a demo session is a demo account.
+    conn.execute("INSERT OR IGNORE INTO demo_accounts SELECT DISTINCT user_id FROM sessions WHERE label = 'demo'")
+    conn.execute("INSERT OR IGNORE INTO demo_accounts SELECT id FROM users WHERE id = 'usr_demo_organizer'")
     conn.execute("DELETE FROM sessions WHERE label = 'demo'")
     conn.execute("DELETE FROM sessions WHERE user_id IN (SELECT user_id FROM demo_accounts)")
     conn.execute("UPDATE users SET password_hash = NULL WHERE id IN (SELECT user_id FROM demo_accounts)")
@@ -71,11 +78,18 @@ def _disable_demo(conn: sqlite3.Connection) -> None:
 def _demo_accounts(conn: sqlite3.Connection, event_id: str) -> None:
     stamp = format_utc(svc.utcnow())
     org_id = "usr_demo_organizer"
-    conn.execute("INSERT INTO users (id, email, name, is_admin, created_at) VALUES (?, ?, ?, 1, ?) "
-                 "ON CONFLICT(id) DO UPDATE SET is_admin = 1", (org_id, DEMO_ORGANIZER_EMAIL, "Demo Organizer", stamp))
-    conn.execute("INSERT OR IGNORE INTO organizers VALUES (?, ?)", (event_id, org_id))
+    taken = conn.execute("SELECT id FROM users WHERE email = ? AND id != ?", (DEMO_ORGANIZER_EMAIL, org_id)).fetchone()
+    if taken:  # someone registered the demo email; never hijack a real account
+        logs.stage("boot", "demo_organizer_email_taken", user=taken["id"])
+    else:
+        conn.execute("INSERT INTO users (id, email, name, is_admin, created_at) VALUES (?, ?, ?, 1, ?) "
+                     "ON CONFLICT(id) DO UPDATE SET is_admin = 1",
+                     (org_id, DEMO_ORGANIZER_EMAIL, "Demo Organizer", stamp))
+        conn.execute("INSERT OR IGNORE INTO organizers VALUES (?, ?)", (event_id, org_id))
     lines = []
     for role, (token, ref) in DEMO_ACCOUNTS.items():
+        if role == "organizer" and taken:
+            continue
         if ref.startswith("jdg_"):
             row = conn.execute("SELECT user_id FROM judges WHERE id = ?", (ref,)).fetchone()
         else:

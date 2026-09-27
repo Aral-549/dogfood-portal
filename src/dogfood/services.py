@@ -9,7 +9,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from . import logs
-from .core import scoring
+from .core import agreement, confidence, scoring
 from .core.authz import Actor
 from .core.timeutil import format_utc, parse_utc
 
@@ -59,7 +59,8 @@ def create_session(conn, user_id: str, label: str = "login", token: str | None =
 
 
 def delete_session(conn, token: str) -> None:
-    conn.execute("DELETE FROM sessions WHERE token_hash = ?", (_token_hash(token),))
+    """Revoke a login session. Demo sessions are shared fixtures and only boot removes them."""
+    conn.execute("DELETE FROM sessions WHERE token_hash = ? AND label != 'demo'", (_token_hash(token),))
 
 
 def load_actor(conn, token: str | None, now: datetime) -> Actor:
@@ -177,15 +178,14 @@ def rubric(conn, event_id: str) -> dict[str, float]:
             conn.execute("SELECT name, weight FROM criteria WHERE event_id = ? ORDER BY position, name", (event_id,))}
 
 
-def results(conn, event_id: str) -> tuple[list[scoring.ProjectResult], dict[str, dict]]:
-    """Compute the ranking for an event. Returns (results, project metadata)."""
+def _scoring_inputs(conn, event_id: str):
+    """(weights, effective complete reviews, canonical project ids, project metadata, excluded judges)."""
     projects = conn.execute(
-        "SELECT p.id, p.title, p.superseded_by, t.name AS team, COALESCE(tr.name, '') AS track "
+        "SELECT p.id, p.title, p.superseded_by, p.track_id, t.name AS team, COALESCE(tr.name, '') AS track "
         "FROM projects p JOIN teams t ON t.id = p.team_id LEFT JOIN tracks tr ON tr.id = p.track_id "
         "WHERE p.event_id = ? AND p.status = 'submitted' ORDER BY p.id", (event_id,)).fetchall()
     superseded = {p["id"]: p["superseded_by"] for p in projects if p["superseded_by"]}
     canonical = [p["id"] for p in projects if not p["superseded_by"]]
-    reviews: dict[int, scoring.Review] = {}
     rows = conn.execute(
         "SELECT r.id, r.judge_id, r.project_id, s.criterion, s.value FROM reviews r "
         "JOIN projects p ON p.id = r.project_id JOIN review_scores s ON s.review_id = r.id "
@@ -193,20 +193,62 @@ def results(conn, event_id: str) -> tuple[list[scoring.ProjectResult], dict[str,
     grouped: dict[int, tuple[str, str, dict]] = {}
     for r in rows:
         grouped.setdefault(r["id"], (r["judge_id"], r["project_id"], {}))[2][r["criterion"]] = r["value"]
-    for rid, (j, p, c) in grouped.items():
-        reviews[rid] = scoring.Review(j, p, c)
+    reviews = [scoring.Review(j, p, c) for j, p, c in grouped.values()]
     weights = rubric(conn, event_id)
-    effective = scoring.effective_reviews(reviews.values(), superseded)
+    effective = scoring.effective_reviews(reviews, superseded)
     complete = [r for r in effective if set(weights) <= set(r.criteria)]
     dropped = {"merged_duplicates": len(reviews) - len(effective), "incomplete": len(effective) - len(complete)}
     if any(dropped.values()):
         logs.stage("scoring", "reviews_not_counted", event_id=event_id, **dropped)
-    res = scoring.score(weights, complete, canonical) if weights else []
-    meta = {p["id"]: {"title": p["title"], "team": p["team"], "track": p["track"],
+    # Conflict of interest: a judge who is (now) on a project's team never counts for it,
+    # even for a review given before joining (scoring re-checks too, see BUG-12).
+    conflicted = {(r["jid"], r["pid"]) for r in conn.execute(
+        "SELECT j.id AS jid, p.id AS pid FROM judges j JOIN team_members m ON m.user_id = j.user_id "
+        "JOIN projects p ON p.team_id = m.team_id WHERE j.event_id = ?", (event_id,))}
+    if conflicted:
+        before = len(complete)
+        complete = [r for r in complete if (r.judge, r.project) not in conflicted
+                    and (r.judge, superseded.get(r.project, r.project)) not in conflicted]
+        if len(complete) != before:
+            logs.stage("scoring", "conflicted_reviews_not_counted", event_id=event_id, count=before - len(complete))
+    excluded = {r["judge_id"]: dict(r) for r in conn.execute(
+        "SELECT x.* FROM judge_exclusions x JOIN judges j ON j.id = x.judge_id WHERE j.event_id = ?", (event_id,))}
+    meta = {p["id"]: {"title": p["title"], "team": p["team"], "track": p["track"], "track_id": p["track_id"],
                       "superseded_by": p["superseded_by"]} for p in projects}
-    logs.stage("scoring", "output", event_id=event_id, projects=len(canonical), reviews=len(complete),
-               superseded=superseded)
+    return weights, complete, canonical, meta, excluded
+
+
+def results(conn, event_id: str) -> tuple[list[scoring.ProjectResult], dict[str, dict]]:
+    """The published ranking: organizer-excluded judges are left out."""
+    weights, reviews, canonical, meta, excluded = _scoring_inputs(conn, event_id)
+    counted = [r for r in reviews if r.judge not in excluded]
+    res = scoring.score(weights, counted, canonical) if weights else []
+    logs.stage("scoring", "output", event_id=event_id, projects=len(canonical), reviews=len(counted),
+               excluded_judges=sorted(excluded))
     return res, meta
+
+
+def analysis(conn, event_id: str, k: int) -> dict:
+    """Ranking plus prize-line confidence (same reviews as the ranking) and judge agreement.
+
+    Agreement is computed over ALL reviews, excluded judges included, so the organizer can
+    see the evidence behind an exclusion and undo it.
+    """
+    weights, reviews, canonical, meta, excluded = _scoring_inputs(conn, event_id)
+    if not weights:
+        return {"results": [], "meta": meta, "confidence": None, "agreement": [], "favoritism": [],
+                "excluded": excluded}
+    counted = [r for r in reviews if r.judge not in excluded]
+    res = scoring.score(weights, counted, canonical)
+    scored, _ = scoring.score_reviews(weights, counted, canonical)
+    conf = confidence.prize_confidence(scored, res, k)
+    all_scored, informative = scoring.score_reviews(weights, reviews, canonical)
+    agreement_rows, flags = agreement.judge_agreement(all_scored, informative)
+    logs.stage("analysis", "output", event_id=event_id, k=k, method=conf.method,
+               close_calls=[p for p, c in conf.projects.items() if c.close_call],
+               outliers=[a.judge for a in agreement_rows if a.status == "outlier"], favoritism=len(flags))
+    return {"results": res, "meta": meta, "confidence": conf, "agreement": agreement_rows,
+            "favoritism": flags, "excluded": excluded}
 
 
 def progress(conn, event_id: str) -> list[dict]:

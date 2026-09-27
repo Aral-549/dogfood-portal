@@ -77,33 +77,96 @@ Entries below come from the 2026-09-27 adversarial pass. Regression cases are in
 - **Symptom:** found reading code before the first run: the submit form route would have been treated as a project id (404).
 - **Root cause:** FastAPI matches in registration order; the parameterized route was registered first.
 - **Stage/module:** HTTP routing (`src/dogfood/app.py`)
-- **Regression case added:** pending (next verification pass)
-- **Status:** fixed, regression case pending
+- **Regression case added:** `tests/golden/test_regressions_2.py` (added by the second verification pass)
+- **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-11 `GET /projects/new` shows the form after the deadline (Gemini review)
 - **Symptom:** the form rendered after `submissions_close`; the POST was correctly refused, so nothing could be saved, but the page misled the user.
 - **Root cause:** the GET handler did not ask `authz.submit_project`.
 - **Stage/module:** HTTP handlers
-- **Regression case added:** pending (next verification pass)
-- **Status:** fixed, regression case pending
+- **Regression case added:** `tests/golden/test_regressions_2.py` (added by the second verification pass)
+- **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-12 judge can score a project of their own team (adversarial pass, code reading)
 - **Symptom:** a judge who joins an assigned project's team before the close could then score it; assignment excludes conflicts but scoring did not re-check.
 - **Root cause:** `authz.score_project` had no conflict-of-interest check.
 - **Stage/module:** core/authz
-- **Regression case added:** pending (next verification pass)
-- **Status:** fixed, regression case pending
+- **Regression case added:** `tests/golden/test_regressions_2.py` (added by the second verification pass)
+- **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-13 logout with a Bearer token revoked the shared demo token
 - **Symptom:** `POST /logout` with `Authorization: Bearer demo-judge-a` deleted that session for every user of the token until restart.
 - **Root cause:** logout deleted whatever token authenticated the request; now it only revokes cookie sessions.
 - **Stage/module:** HTTP handlers / sessions
-- **Regression case added:** pending (next verification pass)
-- **Status:** fixed, regression case pending
+- **Regression case added:** `tests/golden/test_regressions_2.py` (added by the second verification pass)
+- **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-14 minor contract gaps (Gemini + adversarial pass)
 - **Symptom:** (a) Bearer/cookie pointing at different users was not logged (authz.md edge case); (b) reviews not counted (merged duplicates, incomplete) were dropped silently (scoring.md edge case); (c) a fixture without `event` booted an empty portal; (d) `/docs` loaded Swagger UI from a CDN (offline rule).
 - **Root cause:** not implemented. Now: `auth.credential_conflict` log line; `scoring.reviews_not_counted` log line; boot raises FixtureError; docs UI disabled (`/openapi.json` remains).
 - **Stage/module:** auth, scoring, boot, app
-- **Regression case added:** pending (next verification pass)
+- **Regression case added:** `tests/golden/test_regressions_2.py` (added by the second verification pass)
+- **Status:** fixed (regression case passes)
+
+## 2026-09-27 -- BUG-15 anyone can revoke a demo token via logout with it as a cookie
+- **Symptom:** `POST /logout` with `Cookie: session=demo-judge-a` deleted the shared demo session; the checker's token then got 401 until restart.
+- **Root cause:** the BUG-13 fix only skipped Bearer-authenticated logouts; `delete_session` would delete any session, demo included.
+- **Stage/module:** sessions (`services.delete_session`, `app.logout`)
+- **Regression case added:** `tests/golden/test_regressions_2.py` -- `test_bug13_logout_with_demo_token_as_cookie_does_not_revoke_it`
+- **Status:** fixed (regression case passes)
+
+## 2026-09-27 -- BUG-16 500s on lone-surrogate strings, deep JSON nesting, infinite k
+- **Symptom:** `{"password":"\ud800..."}` on /login, /register and every write route; `[` x100000 on any JSON route; `{"k":1e999}` on /organizer/assign: all 500.
+- **Root cause:** strings that cannot be UTF-8 encoded reached `.encode()`/sqlite; `RecursionError` and `OverflowError` were not caught.
+- **Stage/module:** HTTP input boundary (`app.body_of`)
+- **Regression case added:** pending (third verification pass)
 - **Status:** fixed, regression case pending
+
+## 2026-09-27 -- BUG-17 failed request left a transaction open, poisoning every later write
+- **Symptom:** a 500 inside `POST /organizer/events` left `in_transaction` true; every later `BEGIN IMMEDIATE` failed until restart. Under concurrency, one shared connection across threads gave "cannot start a transaction within a transaction" and rollbacks of other requests' work.
+- **Root cause:** one process-wide sqlite connection shared by the threadpool; some handlers had no rollback path.
+- **Stage/module:** db / request plumbing
+- **Regression case added:** pending (third verification pass)
+- **Status:** fixed (one connection per request, rolled back if left open; writes use `db.transaction`), regression case pending
+
+## 2026-09-27 -- BUG-18 event update committed without its audit row
+- **Symptom:** `POST /organizer/event` that failed after the UPDATE left a changed close date and no `event.update` audit row.
+- **Root cause:** autocommit writes before the audit call. Now one transaction (also event create, rubric, exclusions).
+- **Stage/module:** HTTP handlers / audit
+- **Regression case added:** pending (third verification pass)
+- **Status:** fixed, regression case pending
+
+## 2026-09-27 -- BUG-19 demo teardown missed volumes created by the first release
+- **Symptom:** volume from commit 0a43fb2 with demo on, rebooted on the new code with demo off: demo passwords still logged in.
+- **Root cause:** teardown only cleared the new `demo_accounts` table, which old volumes never filled. Now it backfills from demo sessions first.
+- **Stage/module:** boot
+- **Regression case added:** pending (third verification pass)
+- **Status:** fixed, regression case pending
+
+## 2026-09-27 -- BUG-20 importer rubric chosen by rows that are rejected anyway
+- **Symptom:** 127 rows with unknown judges and criteria `{x}` made the rubric `['x']` and rejected all 126 real scores; all-empty criteria imported 126 reviews with no scores.
+- **Root cause:** every row voted. Now only rows whose judge and project resolve vote; ties are reported; no rubric rejects the scores.
+- **Stage/module:** importer
+- **Regression case added:** pending (third verification pass)
+- **Status:** fixed, regression case pending
+
+## 2026-09-27 -- BUG-21 close date before year 1000 stored unpadded, then 500s
+- **Symptom:** `0999-01-01T00:00:00Z` stored as `999-01-01...`; /me and submissions then 500.
+- **Root cause:** glibc `strftime("%Y")` does not zero-pad. `format_utc` now pads explicitly.
+- **Stage/module:** core/timeutil
+- **Regression case added:** pending (third verification pass)
+- **Status:** fixed, regression case pending
+
+## 2026-09-27 -- BUG-22 smaller boot and scoring gaps
+- **Symptom:** (a) demo boot crashed if someone registered `organizer@dogfood.local`; (b) a review given before the judge joined the project's team still counted; (c) non-string `event.name` in fixtures aborted boot with a raw ProgrammingError; `event.id` of spaces was accepted.
+- **Root cause:** (a) only an id conflict was handled, now the demo organizer is skipped and logged; (b) conflicts were only checked at scoring time, now also when computing results; (c) unvalidated fixture fields.
+- **Stage/module:** boot, services, importer
+- **Regression case added:** pending (third verification pass)
+- **Status:** fixed, regression case pending
+
+## 2026-09-27 -- BUG-23 organizer can take over a password-less fixture participant (open, by design limit)
+- **Symptom:** inviting a fixture participant's email as a judge issues a set-password link the organizer can use themselves.
+- **Root cause:** without email delivery the organizer is the courier for set-password links; any password-less account is exposed to them. Documented in README limits.
+- **Stage/module:** lifecycle / auth
+- **Regression case added:** none yet (needs a design decision: email delivery or participant self-claim)
+- **Status:** open

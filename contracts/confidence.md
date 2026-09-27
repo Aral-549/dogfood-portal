@@ -53,7 +53,7 @@ For each close-call project, ordered by `|p_top_k - 0.5|` ascending, then projec
 
 ## Web surface
 - Organizer dashboard: a `P(top k)` column, close-call flag, `k` setting, "Assign tie-breaker judges" button (audited: `assignment.tiebreak`, with the pairs added).
-- CSV: two new trailing columns `p_top_k,close_call` (existing column order unchanged).
+- CSV: a separate organizer export `/api/confidence.csv` with columns `rank,project_id,title,p_top_k,close_call,unreviewed`. (Amended 2026-09-27: the results CSV header is frozen by `csv-export.md` case 1 and its golden tests, so no columns are added there.)
 - Authz: organizer only, same as `export_results`. Judges and participants never see `p_top_k`.
 
 ## Edge cases that must be covered
@@ -67,6 +67,6 @@ For each close-call project, ordered by `|p_top_k - 0.5|` ascending, then projec
 
 ## Status
 - [x] Drafted
-- [ ] Reviewed by a human
+- [x] Reviewed by a human (approved 2026-09-27)
 - [ ] Implementation matches this contract
 - [ ] Golden tests exist for every behavior case above

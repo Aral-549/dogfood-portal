@@ -30,4 +30,5 @@ def require_aware(dt: datetime, name: str = "datetime") -> datetime:
 
 def format_utc(dt: datetime) -> str:
     """Canonical storage form: 2026-03-01T18:00:00Z."""
-    return require_aware(dt).strftime("%Y-%m-%dT%H:%M:%SZ")
+    d = require_aware(dt)
+    return f"{d.year:04d}-{d.month:02d}-{d.day:02d}T{d.hour:02d}:{d.minute:02d}:{d.second:02d}Z"

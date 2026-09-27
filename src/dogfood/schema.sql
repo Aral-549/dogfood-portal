@@ -138,3 +138,19 @@ CREATE TABLE IF NOT EXISTS password_links (
 CREATE TABLE IF NOT EXISTS demo_accounts (
     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE
 );
+
+-- Organizer decision to leave a judge's reviews out of results. Reversible; reviews are never deleted.
+CREATE TABLE IF NOT EXISTS judge_exclusions (
+    judge_id    TEXT PRIMARY KEY REFERENCES judges(id) ON DELETE CASCADE,
+    reason      TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+    excluded_by TEXT NOT NULL,
+    at          TEXT NOT NULL
+);
+
+-- Extra judges added to settle close calls at the prize line (contracts/confidence.md).
+CREATE TABLE IF NOT EXISTS tiebreak_assignments (
+    judge_id   TEXT NOT NULL REFERENCES judges(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    at         TEXT NOT NULL,
+    PRIMARY KEY (judge_id, project_id)
+);

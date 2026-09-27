@@ -131,7 +131,64 @@ shows raw rank, normalized rank and the change side by side for every project.
   merged project has 6 reviews. The raw rows are kept on the original project
   ids, so the merge is recomputed every time and can be audited.
 
-## 4. Results and export
+## 4. How sure is the ranking? (prize-line confidence)
+
+Spec: `contracts/confidence.md`. Code: `src/dogfood/core/confidence.py`.
+
+A single ranking hides how close the prize line is. For each project we ask:
+"if its reviews had come out a little differently, would it still be in the
+top k?" We resample each project's own normalized reviews with replacement
+(a bootstrap), re-rank, and count how often each project lands in the top k.
+When the number of possible resamples is 20 000 or fewer we enumerate all of
+them exactly; otherwise we draw 2 000 with a fixed seed, so the same data
+always gives the same numbers.
+
+On the fixtures, with 3 prizes:
+
+| Rank | Project | P(top 3) |
+|------|---------|----------|
+| 1 | prj_34 Iron Switch | 0.887 |
+| 2 | prj_16 Salt Kiln   | 0.547 (close call) |
+| 3 | prj_33 Slow Trail  | 0.353 (close call) |
+| 4 | prj_37 Salt Loom   | 0.354 (close call) |
+
+Third place is a coin flip: the project ranked 4th is as likely to belong in
+the top 3 as the one ranked 3rd. A plain average would have published that
+as settled. The organizer dashboard flags every project between 20% and 80%
+as a close call, and one button assigns one extra judge to each, preferring
+judges who have already scored other contenders so the new review is
+directly comparable. Confidence is advisory: it never changes the ranking.
+
+**Limit:** judge statistics (mean and sd) are held fixed during resampling,
+so uncertainty in the judges' own calibration is not included. The real
+uncertainty is somewhat larger than shown.
+
+## 5. Judge agreement, outliers and favoritism
+
+Spec: `contracts/judge-agreement.md`. Code: `src/dogfood/core/agreement.py`.
+
+Normalization fixes judges who are consistently harsh or lenient. It cannot
+fix a judge who is biased or careless. For each review we compare the judge's
+normalized score with the mean of the *other* judges on the same project
+(leave-one-out consensus):
+
+- **agreement**: correlation between a judge's scores and the consensus over
+  their shared projects (needs 3+). Below 0 is flagged `outlier`.
+- **favoritism**: one review 2+ standard units above that project's other
+  reviews.
+- **uninformative**: the judge's scores carry no ranking information
+  (jdg_07's 4, 4, 4).
+
+Nothing is excluded automatically. The organizer can exclude a judge's
+reviews with a written reason; it is reversible, audited, and the public
+results page states how many judges were excluded (no names).
+
+**Limit, stated plainly:** with 3 to 11 shared projects per judge,
+correlations are noisy. On the fixtures 7 of 30 judges come out below 0,
+some barely (-0.005). The flag is a prompt to look, not a verdict. Pairwise
+collusion (two judges boosting each other's picks) is not detected.
+
+## 6. Results and export
 
 - **Organizer dashboard** (`/organizer`): judge progress (done / assigned,
   unfinished flagged), raw vs normalized ranking, merged duplicates, and the
@@ -143,7 +200,7 @@ shows raw rank, normalized rank and the change side by side for every project.
 - **Public results** (`/results`) show rank, title, team, track and review
   count only after the organizer publishes. Per-judge scores are never public.
 
-## 5. Role isolation
+## 7. Role isolation
 
 Every protected route asks `core/authz` before it loads any data:
 

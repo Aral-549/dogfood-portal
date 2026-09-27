@@ -54,6 +54,6 @@ Excluded reviews are never deleted: exclusion is a flag on the judge for that ev
 
 ## Status
 - [x] Drafted
-- [ ] Reviewed by a human
+- [x] Reviewed by a human (approved 2026-09-27)
 - [ ] Implementation matches this contract
 - [ ] Golden tests exist for every behavior case above

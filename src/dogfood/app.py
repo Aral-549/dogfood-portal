@@ -1,5 +1,7 @@
 """HTTP layer. Every protected handler asks core.authz first and acts on the Decision."""
 
+import csv
+import io
 import json
 import os
 import secrets
@@ -13,9 +15,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from . import boot, logs, services as svc
+from . import boot, db, logs, services as svc
 from .core import authz, csvexport
 from .core.assignment import auto_assign
+from .core.confidence import tiebreak_assign
 from .core.authz import Actor, Decision
 from .core.deadline import submissions_open
 from .core.timeutil import format_utc, parse_utc
@@ -29,11 +32,13 @@ MAX_WEIGHT = 1000.0
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logs.setup(os.environ.get("DOGFOOD_LOG_LEVEL", "INFO"))
-    previous = getattr(app.state, "conn", None)  # nested lifespans (e.g. two test clients) must not clobber
-    conn = app.state.conn = boot.boot()
+    # Nested lifespans (e.g. two test clients) must not clobber each other.
+    previous = (getattr(app.state, "conn", None), getattr(app.state, "db_path", None))
+    conn = app.state.conn = boot.boot()  # boot-time connection; requests open their own
+    app.state.db_path = boot.db_path()
     yield
     conn.close()
-    app.state.conn = previous
+    app.state.conn, app.state.db_path = previous
 
 
 app = FastAPI(title="DOGFOOD portal", lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -45,7 +50,19 @@ app = FastAPI(title="DOGFOOD portal", lifespan=lifespan, docs_url=None, redoc_ur
 async def request_context(request: Request, call_next):
     rid = uuid.uuid4().hex[:12]
     request.state.request_id = rid
-    conn: sqlite3.Connection = request.app.state.conn
+    # One connection per request: sqlite connections are not safe to share across the
+    # threadpool, and a request that fails mid-transaction must not poison the next one.
+    conn = request.state.conn = db.connect(request.app.state.db_path)
+    try:
+        return await _handle(request, call_next, conn, rid)
+    finally:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+            logs.stage("db", "rollback_open_transaction", request_id=rid, path=request.url.path)
+        conn.close()
+
+
+async def _handle(request: Request, call_next, conn: sqlite3.Connection, rid: str):
     now = svc.utcnow()
     token, source = authz.extract_token(request.headers.get("authorization"), request.cookies.get(SESSION_COOKIE))
     actor = svc.load_actor(conn, token, now)
@@ -74,7 +91,7 @@ def _same_origin(request: Request) -> bool:
 
 
 def conn_of(request: Request) -> sqlite3.Connection:
-    return request.app.state.conn
+    return request.state.conn
 
 
 def actor_of(request: Request) -> Actor:
@@ -109,6 +126,34 @@ def render(request: Request, name: str, ctx: dict | None = None, status: int = 2
     return TEMPLATES.TemplateResponse(request, name, {**base, **(ctx or {})}, status_code=status)
 
 
+class BadInput(Exception):
+    """Request body that cannot be handled safely; answered with 422."""
+
+
+@app.exception_handler(BadInput)
+async def bad_input(request: Request, exc: BadInput):
+    logs.stage("http", "bad_input", request_id=request.state.request_id, reason=str(exc))
+    return JSONResponse({"error": "invalid", "detail": str(exc)}, status_code=422)
+
+
+def _check_text(value, depth: int = 0) -> None:
+    """Reject strings that cannot be stored as UTF-8 (lone surrogates) anywhere in the body."""
+    if depth > 32:
+        raise BadInput("body is nested too deeply")
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            raise BadInput("body contains invalid unicode") from None
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            _check_text(k, depth + 1)
+            _check_text(v, depth + 1)
+    elif isinstance(value, list):
+        for v in value:
+            _check_text(v, depth + 1)
+
+
 async def body_of(request: Request) -> dict:
     ctype = request.headers.get("content-type", "")
     if "application/json" in ctype:
@@ -116,9 +161,14 @@ async def body_of(request: Request) -> dict:
             data = await request.json()
         except (json.JSONDecodeError, UnicodeDecodeError):
             return {}
+        except RecursionError:
+            raise BadInput("body is nested too deeply") from None
+        _check_text(data)
         return data if isinstance(data, dict) else {}
     form = await request.form()
-    return {k: v for k, v in form.items()}
+    data = {k: v for k, v in form.items()}
+    _check_text(data)
+    return data
 
 
 def clean(value, limit: int) -> str:
@@ -177,7 +227,10 @@ def public_results(request: Request):
         return render(request, "message.html", {"title": "Results", "message": "Results have not been published yet."},
                       status=404)
     res, meta = svc.results(conn_of(request), ev["id"])
-    return render(request, "results.html", {"results": res, "meta": meta})
+    excluded = conn_of(request).execute(
+        "SELECT COUNT(*) FROM judge_exclusions x JOIN judges j ON j.id = x.judge_id WHERE j.event_id = ?",
+        (ev["id"],)).fetchone()[0]
+    return render(request, "results.html", {"results": res, "meta": meta, "excluded_count": excluded})
 
 
 # --- accounts --------------------------------------------------------------------------
@@ -206,8 +259,9 @@ async def login(request: Request):
 
 @app.post("/logout")
 def logout(request: Request):
-    if request.state.token and request.state.token_source == "cookie":
-        svc.delete_session(conn_of(request), request.state.token)
+    cookie_token = request.cookies.get(SESSION_COOKIE)
+    if cookie_token:
+        svc.delete_session(conn_of(request), cookie_token)
     resp = RedirectResponse("/projects", status_code=303)
     resp.delete_cookie(SESSION_COOKIE)
     return resp
@@ -558,7 +612,9 @@ def organizer_home(request: Request):
     if denied:
         return denied
     conn = conn_of(request)
-    res, meta = svc.results(conn, ev["id"])
+    k = _prize_places(request.query_params.get("k"))
+    a = svc.analysis(conn, ev["id"], k)
+    res, meta = a["results"], a["meta"]
     duplicates = [(pid, m["superseded_by"]) for pid, m in meta.items() if m["superseded_by"]]
     audit_rows = conn.execute("SELECT * FROM audit_log WHERE event_id = ? OR event_id IS NULL ORDER BY id DESC LIMIT 50",
                               (ev["id"],)).fetchall()
@@ -568,7 +624,119 @@ def organizer_home(request: Request):
     return render(request, "organizer.html", {
         "results": res, "meta": meta, "progress": svc.progress(conn, ev["id"]), "duplicates": duplicates,
         "rubric": svc.rubric(conn, ev["id"]), "audit": audit_rows, "judges": judges, "tracks": tracks,
-        "links": request.query_params.get("link")})
+        "links": request.query_params.get("link"), "k": k, "confidence": a["confidence"],
+        "agreement": a["agreement"], "favoritism": a["favoritism"], "excluded": a["excluded"]})
+
+
+def _prize_places(raw) -> int:
+    try:
+        return max(1, min(50, int(raw or 3)))
+    except (TypeError, ValueError, OverflowError):
+        return 3
+
+
+@app.get("/api/confidence.csv")
+def confidence_csv(request: Request):
+    ev = event_for(request)
+    if ev is None:
+        return JSONResponse({"error": "no_event"}, status_code=404)
+    decision = authz.export_results(actor_of(request), ev["id"])
+    if not decision.allowed:
+        return deny(request, decision)
+    k = _prize_places(request.query_params.get("k"))
+    a = svc.analysis(conn_of(request), ev["id"], k)
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\r\n")
+    w.writerow(["rank", "project_id", "title", "p_top_k", "close_call", "unreviewed"])
+    for r in a["results"]:
+        c = a["confidence"].projects[r.project]
+        w.writerow([r.rank, r.project, csvexport.safe_cell(a["meta"][r.project]["title"]), f"{c.p_top_k:.3f}",
+                    "true" if c.close_call else "false", "true" if c.unreviewed else "false"])
+    return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="confidence-{ev["id"]}-top{k}.csv"'})
+
+
+@app.get("/api/judge-agreement")
+def judge_agreement_api(request: Request):
+    ev, denied = _organizer_guard(request)
+    if denied:
+        return denied
+    a = svc.analysis(conn_of(request), ev["id"], _prize_places(request.query_params.get("k")))
+    return {"event": ev["id"],
+            "judges": [vars(x) | {"excluded": x.judge in a["excluded"]} for x in a["agreement"]],
+            "favoritism": [vars(f) for f in a["favoritism"]],
+            "excluded": list(a["excluded"].values())}
+
+
+@app.post("/organizer/tiebreak")
+async def run_tiebreak(request: Request):
+    ev, denied = _organizer_guard(request)
+    if denied:
+        return denied
+    conn = conn_of(request)
+    k = _prize_places((await body_of(request)).get("k"))
+    a = svc.analysis(conn, ev["id"], k)
+    close = [(p, c.p_top_k) for p, c in a["confidence"].projects.items() if c.close_call] if a["confidence"] else []
+    judge_tracks: dict[str, set[str]] = {r["id"]: set() for r in
+                                         conn.execute("SELECT id FROM judges WHERE event_id = ?", (ev["id"],))}
+    for r in conn.execute("SELECT jt.judge_id, jt.track_id FROM judge_tracks jt JOIN judges j ON j.id = jt.judge_id "
+                          "WHERE j.event_id = ?", (ev["id"],)):
+        judge_tracks[r["judge_id"]].add(r["track_id"])
+    for jid in a["excluded"]:
+        judge_tracks.pop(jid, None)  # never send an excluded judge to settle a close call
+    existing = [(r["judge_id"], r["project_id"]) for r in conn.execute(
+        "SELECT a.judge_id, a.project_id FROM assignments a JOIN judges j ON j.id = a.judge_id WHERE j.event_id = ?",
+        (ev["id"],))]
+    reviewed_by: dict[str, set[str]] = {}
+    for r in conn.execute("SELECT r.judge_id, r.project_id FROM reviews r JOIN judges j ON j.id = r.judge_id "
+                          "WHERE j.event_id = ?", (ev["id"],)):
+        reviewed_by.setdefault(r["judge_id"], set()).add(r["project_id"])
+    conflicts = {(r["jid"], r["pid"]) for r in conn.execute(
+        "SELECT j.id AS jid, p.id AS pid FROM judges j JOIN team_members m ON m.user_id = j.user_id "
+        "JOIN projects p ON p.team_id = m.team_id WHERE j.event_id = ?", (ev["id"],))}
+    done = {r["project_id"] for r in conn.execute(
+        "SELECT t.project_id FROM tiebreak_assignments t JOIN projects p ON p.id = t.project_id WHERE p.event_id = ?",
+        (ev["id"],))}
+    new, stuck = tiebreak_assign(close, {p: m["track_id"] for p, m in a["meta"].items()}, judge_tracks, existing,
+                                 reviewed_by, conflicts, done)
+    stamp = format_utc(request.state.now)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.executemany("INSERT OR IGNORE INTO assignments VALUES (?, ?)", new)
+        conn.executemany("INSERT OR IGNORE INTO tiebreak_assignments VALUES (?, ?, ?)", [(j, p, stamp) for j, p in new])
+        svc.audit(conn, actor_of(request), ev["id"], "assignment.tiebreak", ev["id"], k=k, added=new,
+                  no_candidate=stuck)
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return RedirectResponse(f"/organizer?event={ev['id']}&k={k}", status_code=303)
+
+
+@app.post("/organizer/judges/{judge_id}/exclude")
+@app.post("/organizer/judges/{judge_id}/include")
+async def set_judge_exclusion(request: Request, judge_id: str):
+    ev, denied = _organizer_guard(request)
+    if denied:
+        return denied
+    conn = conn_of(request)
+    if not conn.execute("SELECT 1 FROM judges WHERE id = ? AND event_id = ?", (judge_id, ev["id"])).fetchone():
+        return deny(request, Decision.NOT_FOUND)
+    if request.url.path.endswith("/exclude"):
+        reason = clean((await body_of(request)).get("reason"), 1000)
+        if not reason:
+            return JSONResponse({"error": "invalid", "detail": "a reason is required"}, status_code=422)
+        with db.transaction(conn):
+            conn.execute("INSERT INTO judge_exclusions VALUES (?, ?, ?, ?) ON CONFLICT(judge_id) DO UPDATE SET "
+                         "reason = excluded.reason, excluded_by = excluded.excluded_by, at = excluded.at",
+                         (judge_id, reason, actor_of(request).user_id, format_utc(request.state.now)))
+            svc.audit(conn, actor_of(request), ev["id"], "judge.exclude", judge_id, reason=reason)
+    else:
+        with db.transaction(conn):
+            removed = conn.execute("DELETE FROM judge_exclusions WHERE judge_id = ?", (judge_id,)).rowcount
+            if removed:
+                svc.audit(conn, actor_of(request), ev["id"], "judge.include", judge_id)
+    return RedirectResponse(f"/organizer?event={ev['id']}", status_code=303)
 
 
 @app.post("/organizer/event")
@@ -588,10 +756,11 @@ async def update_event(request: Request):
     for key in ("name", "prizes"):
         if isinstance(data.get(key), str):
             changes[key] = clean(data[key], 2000)
-    for key, value in changes.items():
-        conn.execute(f"UPDATE events SET {key} = ? WHERE id = ?", (value, ev["id"]))  # key from fixed tuple above
-    svc.audit(conn, actor_of(request), ev["id"], "event.update", ev["id"],
-              before={k: ev[k] for k in changes}, after=changes)
+    with db.transaction(conn):
+        for key, value in changes.items():
+            conn.execute(f"UPDATE events SET {key} = ? WHERE id = ?", (value, ev["id"]))  # key from fixed tuple above
+        svc.audit(conn, actor_of(request), ev["id"], "event.update", ev["id"],
+                  before={k: ev[k] for k in changes}, after=changes)
     return RedirectResponse(f"/organizer?event={ev['id']}", status_code=303)
 
 
@@ -611,17 +780,16 @@ async def create_event(request: Request):
         return JSONResponse({"error": "invalid", "detail": str(e)}, status_code=422)
     name = clean(data.get("name"), 200) or "New event"
     eid = "evt_" + secrets.token_hex(4)
-    conn.execute("BEGIN IMMEDIATE")
-    conn.execute("INSERT INTO events (id, name, submissions_close, judging_close, prizes, created_at) "
-                 "VALUES (?, ?, ?, ?, ?, ?)", (eid, name, close, jclose, clean(data.get("prizes"), 2000),
-                                                format_utc(request.state.now)))
-    conn.execute("INSERT INTO organizers VALUES (?, ?)", (eid, actor.user_id))
-    for i, tname in enumerate(t.strip() for t in clean(data.get("tracks"), 2000).split(",") if t.strip()):
-        conn.execute("INSERT INTO tracks VALUES (?, ?, ?)", (f"{eid}_trk_{i + 1:02d}", eid, tname[:100]))
-    for pos, crit in enumerate(("functionality", "quality", "innovation")):
-        conn.execute("INSERT INTO criteria VALUES (?, ?, 1, ?)", (eid, crit, pos))
-    conn.execute("COMMIT")
-    svc.audit(conn, actor, eid, "event.create", eid, name=name)
+    with db.transaction(conn):
+        conn.execute("INSERT INTO events (id, name, submissions_close, judging_close, prizes, created_at) "
+                     "VALUES (?, ?, ?, ?, ?, ?)", (eid, name, close, jclose, clean(data.get("prizes"), 2000),
+                                                    format_utc(request.state.now)))
+        conn.execute("INSERT INTO organizers VALUES (?, ?)", (eid, actor.user_id))
+        for i, tname in enumerate(t.strip() for t in clean(data.get("tracks"), 2000).split(",") if t.strip()):
+            conn.execute("INSERT INTO tracks VALUES (?, ?, ?)", (f"{eid}_trk_{i + 1:02d}", eid, tname[:100]))
+        for pos, crit in enumerate(("functionality", "quality", "innovation")):
+            conn.execute("INSERT INTO criteria VALUES (?, ?, 1, ?)", (eid, crit, pos))
+        svc.audit(conn, actor, eid, "event.create", eid, name=name)
     return RedirectResponse(f"/organizer?event={eid}", status_code=303)
 
 
@@ -642,9 +810,10 @@ async def update_rubric(request: Request):
             return JSONResponse({"error": "invalid", "detail": f"weight for {name} must be in (0, {MAX_WEIGHT:g}]"},
                                 status_code=422)
         new[name] = w
-    for name, w in new.items():
-        conn.execute("UPDATE criteria SET weight = ? WHERE event_id = ? AND name = ?", (w, ev["id"], name))
-    svc.audit(conn, actor_of(request), ev["id"], "rubric.update", ev["id"], before=current, after=new)
+    with db.transaction(conn):
+        for name, w in new.items():
+            conn.execute("UPDATE criteria SET weight = ? WHERE event_id = ? AND name = ?", (w, ev["id"], name))
+        svc.audit(conn, actor_of(request), ev["id"], "rubric.update", ev["id"], before=current, after=new)
     return RedirectResponse(f"/organizer?event={ev['id']}", status_code=303)
 
 
@@ -693,7 +862,7 @@ async def run_assignment(request: Request):
     data, conn = await body_of(request), conn_of(request)
     try:
         k = max(1, min(10, int(data.get("k") or 3)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         k = 3
     projects = [(r["id"], r["track_id"]) for r in conn.execute(
         "SELECT id, track_id FROM projects WHERE event_id = ? AND status = 'submitted' AND superseded_by IS NULL",
