@@ -43,6 +43,12 @@ section { margin:1.5rem 0; }
       {% if event and actor.is_organizer(event.id) %}<a href="/organizer?event={{ event.id }}">Organizer</a>{% endif %}
     {% endif %}
   </nav>
+  {% if events|length > 1 %}
+  <form method="get" action="{{ request.url.path }}" class="inline">
+    <select name="event" aria-label="Event">{% for e in events %}<option value="{{ e.id }}"{% if event and e.id == event.id %} selected{% endif %}>{{ e.name }}</option>{% endfor %}</select>
+    <button>Switch</button>
+  </form>
+  {% endif %}
   {% if actor.authenticated %}
     <form class="inline" method="post" action="/logout"><button>Log out</button></form>
   {% else %}

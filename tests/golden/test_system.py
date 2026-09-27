@@ -56,3 +56,23 @@ def test_session_cookie_secure_only_over_https(tmp_path):
         with TestClient(app, base_url="https://testserver", follow_redirects=False) as c:
             r = c.post("/register", data={"email": "cookie2@example.org", "password": "a-long-password"})
             assert "secure" in r.headers["set-cookie"].lower()
+
+
+def test_event_choice_is_remembered_by_pages_not_by_the_api(tmp_path):
+    with portal(tmp_path) as c:
+        r = c.post("/api/v1/events", json={"name": "Second Hack", "submissions_close": "2099-01-01T00:00:00Z"},
+                   headers=ORGANIZER)
+        eid = r.headers["location"].split("event=")[1]
+        page = c.get("/projects", headers=ORGANIZER).text
+        assert "Second Hack" in page and 'name="event"' in page             # switcher shown: 2 events
+        assert c.get(f"/projects?event={eid}").status_code == 200           # pick it ...
+        assert "Second Hack" in c.get("/projects").text.split("<title>")[1].split("</title>")[0]  # ... remembered
+        assert c.get("/api/v1/ballot", headers=PARTICIPANT).json()["event"] == "evt_01"          # API: explicit
+        assert "No event" in c.get("/projects?event=evt_nope").text          # an explicit unknown id is not guessed
+        c.get("/projects?event=evt_01")
+        assert "Sample Hack 2026" in c.get("/projects").text.split("</title>")[0]
+
+
+def test_no_switcher_with_one_event(tmp_path):
+    with portal(tmp_path) as c:
+        assert 'name="event"' not in c.get("/projects").text

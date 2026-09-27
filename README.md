@@ -138,8 +138,9 @@ curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/js
 
 - No email delivery. Invite and set-password links are shown to the
   organizer to pass on, which keeps the portal offline-capable.
-- One event is the default view. Other events are selected with `?event=<id>`;
-  there is no event switcher in the UI yet.
+- Several events: the header has an event switcher, and the browser remembers
+  the last event picked. The API never guesses: pass `?event=<id>` (default: the
+  first event).
 - Normalization uses plain per-judge z-scores, with no shrinkage for judges
   who scored few projects. See `JUDGING.md`, "Known limits".
 - No eligibility rules beyond "submitted, not superseded, before the deadline".

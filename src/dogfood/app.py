@@ -155,6 +155,10 @@ async def _handle(request: Request, call_next, conn: sqlite3.Connection, rid: st
     else:  # clickjacking protection everywhere except the embeddable widget
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+    picked = request.query_params.get("event")
+    if picked and request.method == "GET" and not request.url.path.startswith("/api/") \
+            and picked != request.cookies.get(EVENT_COOKIE) and svc.get_event(conn, picked):
+        response.set_cookie(EVENT_COOKIE, picked, samesite="lax", max_age=180 * 86400, httponly=True)
     response.headers["X-Content-Type-Options"] = "nosniff"
     # Set-password links carry their token in the path: never send it on to another site.
     response.headers["Referrer-Policy"] = "same-origin"
@@ -177,10 +181,18 @@ def actor_of(request: Request) -> Actor:
     return request.state.actor
 
 
+EVENT_COOKIE = "event"
+
+
 def event_for(request: Request):
+    """?event= wins; pages (not the API, which stays explicit) then fall back to the event the
+    browser last picked, so links without ?event= do not silently jump back to the default."""
     conn = conn_of(request)
-    ev = svc.get_event(conn, request.query_params.get("event") or svc.default_event_id(conn))
-    return ev
+    chosen = request.query_params.get("event")
+    if not chosen and not request.url.path.startswith("/api/"):
+        chosen = request.cookies.get(EVENT_COOKIE)
+    return svc.get_event(conn, chosen) or (None if request.query_params.get("event") else
+                                           svc.get_event(conn, svc.default_event_id(conn)))
 
 
 def wants_json(request: Request) -> bool:
@@ -200,7 +212,8 @@ def deny(request: Request, decision: Decision, reason: str | None = None):
 
 def render(request: Request, name: str, ctx: dict | None = None, status: int = 200):
     ev = event_for(request)
-    base = {"request": request, "actor": actor_of(request), "event": ev,
+    events = conn_of(request).execute("SELECT id, name FROM events ORDER BY created_at, id").fetchall()
+    base = {"request": request, "actor": actor_of(request), "event": ev, "events": events,
             "csrf_ok": True, "now": format_utc(request.state.now)}
     return TEMPLATES.TemplateResponse(request, name, {**base, **(ctx or {})}, status_code=status)
 
