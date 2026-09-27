@@ -113,3 +113,77 @@ def test_cross_check_endpoint_is_organizer_only_and_flags_disputes(tmp_path):
         assert by["prj_34"]["prize_line_disputed"] is False            # 1st by every method
         page = c.get("/organizer", headers=ORGANIZER).text
         assert "Order rank" in page and "prize line disputed" in page
+
+
+# --- pre-announcement integrity checks (MLH: "cheating check on all winners") -------------------
+from dogfood.core import integrity  # noqa: E402
+
+LONG = "A realtime dashboard that tracks air quality sensors across campus and alerts students"
+
+
+def test_normalize_repo():
+    assert integrity.normalize_repo("https://www.GitHub.com/Org/Repo.git/") == "github.com/org/repo"
+    assert integrity.normalize_repo("http://github.com/org/repo") == "github.com/org/repo"
+    assert integrity.normalize_repo("") == "" and integrity.normalize_repo("not a url") == ""
+
+
+def test_similarity_hand_computed():
+    # "a b c d" -> {abc, bcd}; "a b c e" -> {abc, bce}: Jaccard 1/3.
+    assert abs(integrity.jaccard(integrity.shingles("a b c d"), integrity.shingles("a b c e")) - 1 / 3) < 1e-12
+
+
+def test_checks():
+    projects = [
+        {"id": "p1", "team": "t1", "title": "Air", "summary": LONG, "repo_url": "https://github.com/x/air"},
+        {"id": "p2", "team": "t2", "title": "Air", "summary": LONG + " daily", "repo_url": "https://github.com/X/air.git"},
+        {"id": "p3", "team": "t1", "title": "Air v2", "summary": LONG, "repo_url": "https://github.com/x/air"},
+        {"id": "p4", "team": "t3", "title": "Short", "summary": "One line of what it does.", "repo_url": ""},
+        {"id": "p5", "team": "t4", "title": "Short", "summary": "One line of what it does.", "repo_url": "https://gitlab.com/y/z"},
+    ]
+    got = {(f.project, f.kind, f.other) for f in integrity.check(projects)}
+    assert ("p1", "shared_repo", "p2") in got and ("p2", "shared_repo", "p1") in got
+    assert ("p1", "similar_text", "p2") in got
+    assert ("p1", "shared_repo", "p3") not in got          # same team: the importer's duplicate merge, not a flag
+    assert ("p4", "no_repo", None) in got
+    assert not any(f[1] == "similar_text" and "p4" in (f[0], f[2]) for f in got)   # boilerplate one-liners
+
+
+def test_integrity_endpoint_puts_contenders_first(tmp_path):
+    with portal(tmp_path) as c:
+        assert c.get("/api/v1/integrity", headers=JUDGE_A).status_code == 403
+        assert c.get("/api/v1/integrity?k=3", headers=ORGANIZER).json()["flags"] == []   # fixture is clean
+        # A copy of the winner's repository submitted by another team.
+        top = c.get("/api/v1/results", headers=ORGANIZER).json()[0]["project"]
+        repo = _q(tmp_path, "SELECT repo_url FROM projects WHERE id = ?", (top,))[0][0]
+        c.post("/api/v1/event", json={"submissions_close": "2099-01-01T00:00:00Z"}, headers=ORGANIZER)
+        c.post("/register", data={"email": "copycat@example.org", "password": "a-long-password"})
+        tok = c.post("/api/v1/tokens", json={}).json()["token"]
+        c.cookies.clear()
+        cat = {"Authorization": f"Bearer {tok}"}
+        c.post("/api/v1/teams", json={"name": "Copycats"}, headers=cat)
+        assert c.post("/api/v1/projects", json={"title": "Totally new", "repo_url": repo}, headers=cat).status_code == 201
+        flags = c.get("/api/v1/integrity?k=3", headers=ORGANIZER).json()["flags"]
+        assert flags[0]["project"] == top and flags[0]["kind"] == "shared_repo" and flags[0]["prize_contender"]
+        assert "flag on prize contenders" in c.get("/organizer", headers=ORGANIZER).text
+
+
+# --- capacity planning (MLH judge sizing formula) and per-track winners (Devpost categories) ------
+def test_plan_matches_mlh_formula():
+    from dogfood.core.planning import plan
+    # MLH's own reference row: 175 projects, 3 rounds, 4 minutes, 120 minutes -> 18 judges
+    # (175 * 3 * 4 / 120 = 17.5, rounded up).
+    p = plan(175, 18)
+    assert p.judges_needed_for[120] == 18
+    assert p.reviews_needed == 525 and p.per_judge == 30 and p.minutes_per_judge == 120
+    assert plan(10, 0).per_judge == 0
+
+
+def test_dashboard_plan_and_results_by_track(tmp_path):
+    with portal(tmp_path) as c:
+        page = c.get("/organizer", headers=ORGANIZER).text
+        # fixture: 40 canonical projects x 3 = 120 reviews needed; 30 judges -> 4 each, 16 min
+        assert "40 projects &times; 3 reviews = 120 reviews needed" in page
+        assert "each does about 4 (16 min" in page
+        c.post("/api/v1/results/publish", json={}, headers=ORGANIZER)
+        res = c.get("/results").text
+        assert "Top of each track" in res and "overall #1" in res

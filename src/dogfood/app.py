@@ -21,6 +21,7 @@ from . import boot, db, logs, services as svc
 from .core import authz, csvexport, importer, records, webhooks
 from .core.assignment import auto_assign
 from .core.confidence import tiebreak_assign
+from .core.planning import plan as judging_plan
 from .core.public import ballot_order, normalize_email, tally, voting_state
 from .core.ratelimit import SlidingWindow, Unlimited
 from .webhook_worker import Worker, enqueue
@@ -336,7 +337,12 @@ def public_results(request: Request):
     excluded = conn_of(request).execute(
         "SELECT COUNT(*) FROM judge_exclusions x JOIN judges j ON j.id = x.judge_id WHERE j.event_id = ? "
         "AND EXISTS (SELECT 1 FROM reviews r WHERE r.judge_id = x.judge_id)", (ev["id"],)).fetchone()[0]
+    by_track: dict[str, list] = {}
+    for r in res:  # Devpost-style categories: the same published ranking, read per track
+        if r.n_reviews and meta[r.project]["track"]:
+            by_track.setdefault(meta[r.project]["track"], []).append(r)
     return render(request, "results.html", {"results": res, "meta": meta, "excluded_count": excluded,
+                                            "by_track": {t: rs[:3] for t, rs in sorted(by_track.items())},
                                             "voting_closed": _vstate(ev, request.state.now) == "closed"})
 
 
@@ -904,7 +910,10 @@ def organizer_home(request: Request):
         "voided": {r["user_id"]: r["reason"] for r in conn.execute(
             "SELECT user_id, reason FROM voided_voters WHERE event_id = ?", (ev["id"],))},
         "agreement": a["agreement"], "favoritism": a["favoritism"], "excluded": a["excluded"], "shrunk": a["shrunk"],
-        "cross": {x["project"]: x for x in a["cross_check"]}})
+        "cross": {x["project"]: x for x in a["cross_check"]},
+        "integrity": svc.integrity_report(conn, ev["id"], {r.project: r.rank for r in res}, k),
+        "plan": judging_plan(len(res), len(judges), sum(r.n_reviews for r in res)),
+        "under_reviewed": [r for r in res if r.n_reviews < 3]})
 
 
 def _prize_places(raw) -> int:
@@ -1749,6 +1758,18 @@ async def import_event(request: Request):
         return JSONResponse({"error": "invalid", "detail": "import failed and was undone"}, status_code=422)
     return JSONResponse({"event": event["id"], "counts": report.counts, "rejected": report.rejected,
                          "duplicates": report.duplicates}, status_code=201)
+
+
+@app.get("/api/v1/integrity")
+def integrity_api(request: Request):
+    """Organizer: pre-announcement checks (shared repositories, near-identical submissions across
+    teams, no repository), prize contenders first. Flags for a human; nothing is penalized."""
+    ev, denied = _organizer_guard(request)
+    if denied:
+        return denied
+    k = _prize_places(request.query_params.get("k"))
+    res, _ = svc.results(conn_of(request), ev["id"])
+    return {"k": k, "flags": svc.integrity_report(conn_of(request), ev["id"], {r.project: r.rank for r in res}, k)}
 
 
 @app.get("/api/v1/results/cross-check")

@@ -114,6 +114,27 @@
   </table></div>
 </section>
 
+<section class="card">
+  <h2>Judging plan</h2>
+  <p>{{ plan.projects }} projects &times; {{ plan.reviews_per_project }} reviews = {{ plan.reviews_needed }} reviews needed; {{ plan.reviews_done }} counted so far.
+    {% if plan.judges %}With {{ plan.judges }} judge{{ "" if plan.judges == 1 else "s" }}, each does about {{ plan.per_judge }} ({{ plan.minutes_per_judge }} min at {{ plan.minutes_per_review }} min per project).{% else %}No judges yet.{% endif %}</p>
+  <p class="muted">Judges needed to finish in {% for w, j in plan.judges_needed_for.items() %}{{ w }} min: {{ j }}{% if not loop.last %}; {% endif %}{% endfor %}. (MLH sizing: judges = projects &times; reviews &times; minutes &divide; window; plan for a few to drop out.)</p>
+  {% if under_reviewed %}<p><strong>{{ under_reviewed|length }} project{{ "" if under_reviewed|length == 1 else "s" }} with fewer than 3 counted reviews:</strong>
+    {% for r in under_reviewed[:12] %}{{ meta[r.project].title }} ({{ r.n_reviews }}){% if not loop.last %}, {% endif %}{% endfor %}{% if under_reviewed|length > 12 %}, &hellip;{% endif %}.
+    Run auto-assign to add judges.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Before announcing: integrity checks</h2>
+  <p class="muted">Offline checks on submitted projects: the same repository from different teams, near-identical title and summary across teams, no repository to verify. Prize contenders (top {{ k }}) first. These are prompts for a human look, never automatic penalties.</p>
+  {% set contenders = integrity|selectattr("prize_contender")|list %}
+  {% if contenders %}<p><strong>{{ contenders|length }} flag{{ "" if contenders|length == 1 else "s" }} on prize contenders.</strong></p>{% else %}<p>No flags on the top {{ k }}.</p>{% endif %}
+  {% if integrity %}<details {% if contenders %}open{% endif %}><summary>{{ integrity|length }} flag{{ "" if integrity|length == 1 else "s" }} in total</summary>
+  <div class="table-wrap"><table><tr><th>Rank</th><th>Project</th><th>Check</th><th>Detail</th></tr>
+  {% for f in integrity %}<tr><td>{{ f.rank or "" }}</td><td><a href="/projects/{{ f.project }}">{{ meta[f.project].title if f.project in meta else f.project }}</a> <span class="muted">{{ f.project }}</span></td><td><span class="flag">{{ f.kind.replace("_", " ") }}</span></td><td>{{ f.detail }}</td></tr>{% endfor %}
+  </table></div></details>{% endif %}
+</section>
+
 {% if recusals %}<section class="card">
   <h2>Recusals</h2>
   <p class="muted">Judges who declared a conflict of interest. Their assignment was removed and any score they gave no longer counts. Run auto-assign again to fill the gap.</p>

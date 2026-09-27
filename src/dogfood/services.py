@@ -10,7 +10,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 from . import logs
-from .core import agreement, confidence, ordinal, scoring
+from .core import agreement, confidence, integrity, ordinal, scoring
 from .core.authz import Actor
 from .core.timeutil import format_utc, parse_utc
 
@@ -496,3 +496,14 @@ def apply_import_extras(conn, event_id: str, data: dict, actor: Actor, now: date
                 conn.execute("INSERT OR IGNORE INTO judge_exclusions VALUES (?, ?, ?, ?)",
                              (x["judge_id"], x["reason"][:1000], actor.user_id, stamp))
         audit(conn, actor, event_id, "event.import", event_id)
+
+
+def integrity_report(conn, event_id: str, ranks: dict[str, int], k: int) -> list[dict]:
+    """core.integrity flags for the event's canonical submitted projects, prize contenders first."""
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, team_id AS team, title, summary, repo_url FROM projects "
+        "WHERE event_id = ? AND status = 'submitted' AND superseded_by IS NULL", (event_id,))]
+    flags = integrity.check(rows)
+    out = [{"project": f.project, "rank": ranks.get(f.project), "kind": f.kind, "other": f.other, "detail": f.detail,
+            "prize_contender": (ranks.get(f.project) or 10 ** 9) <= k} for f in flags]
+    return sorted(out, key=lambda x: (not x["prize_contender"], x["rank"] or 10 ** 9, x["project"], x["kind"]))

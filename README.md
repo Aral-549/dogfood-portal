@@ -127,12 +127,28 @@ curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/js
      --data-binary @evt_01.json http://localhost:8080/api/v1/import
 ```
 
+## Beyond the brief: ideas from other platforms
+
+`RESEARCH.md` compares Devpost, Gavel, MLH's judging guide, DoraHacks and others, and
+explains what we adopted:
+
+- **Order rank**: a Bradley-Terry ranking from each judge's ordering of their projects,
+  immune to judge generosity, beside the published and shrunk ranks; projects whose top-k
+  place depends on the method are flagged *prize line disputed*
+  (`GET /api/v1/results/cross-check`).
+- **Judge recusal**: judges declare a conflict of interest; the pairing is removed everywhere.
+- **Integrity checks before announcing**: shared repositories and near-identical submissions
+  across teams, missing repositories, prize contenders first (`GET /api/v1/integrity`).
+- **Judging plan**: MLH's sizing formula, per-judge load, under-reviewed projects.
+- **Top of each track** on the results page.
+
 ## Docs
 
 - `ARCHITECTURE.md`: how it fits together and why
 - `DATA-MODEL.md`: schema, import and export
 - `JUDGING.md`: assignment, scoring maths, normalization, and its limits
 - `contracts/`: the input -> expected-output specs the code was built against
+- `RESEARCH.md`: comparable platforms, what we adopted and what we rejected
 
 ## Honest limits
 
