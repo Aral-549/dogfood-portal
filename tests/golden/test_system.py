@@ -76,3 +76,28 @@ def test_event_choice_is_remembered_by_pages_not_by_the_api(tmp_path):
 def test_no_switcher_with_one_event(tmp_path):
     with portal(tmp_path) as c:
         assert 'name="event"' not in c.get("/projects").text
+
+
+def test_upgrade_from_t2_volume(tmp_path):
+    """A volume created by the T2 release (schema frozen in data/schema_t2.sql) boots on today's
+    code: columns are added, existing rows and rankings are untouched, new features work."""
+    import sqlite3
+    from pathlib import Path
+    old = (Path(__file__).parent / "data" / "schema_t2.sql").read_text()
+    conn = sqlite3.connect(str(tmp_path / "dogfood.db"))
+    conn.executescript(old)
+    conn.close()
+    with portal(tmp_path) as c:                     # boot imports the fixtures into the old-shape file
+        before = c.get("/api/export.csv", headers=ORGANIZER).text
+    with portal(tmp_path) as c:                     # a second boot on the migrated file
+        assert c.get("/api/export.csv", headers=ORGANIZER).text == before
+        assert c.post("/api/v1/event", json={"voting_open": "2026-01-01T00:00:00Z",
+                                             "voting_close": "2099-01-01T00:00:00Z"}, headers=ORGANIZER).status_code == 303
+        assert c.post("/api/v1/votes", json={"project": "prj_02"}, headers=PARTICIPANT).status_code == 201
+        c.post("/api/v1/results/publish", json={}, headers=ORGANIZER)
+        assert c.post("/api/v1/records/issue", headers=ORGANIZER).json()["issued"] > 0
+    conn = sqlite3.connect(str(tmp_path / "dogfood.db"))
+    cols = {t: {r[1] for r in conn.execute(f"PRAGMA table_info({t})")} for t in ("events", "users", "records", "sessions")}
+    conn.close()
+    assert {"voting_open", "voting_close", "votes_per_voter", "voting_closed_sent"} <= cols["events"]
+    assert "email_norm" in cols["users"] and "revoked_at" in cols["records"] and "last_used_at" in cols["sessions"]
