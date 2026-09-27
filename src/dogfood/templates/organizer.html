@@ -65,7 +65,7 @@
   </form>
   {% if duplicates %}<p class="muted">Merged duplicates: {% for old, new in duplicates %}{{ old }} into {{ new }}{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
   <div class="table-wrap"><table>
-    <tr><th>Rank</th><th>Raw rank</th><th>Change</th><th>Project</th><th>Reviews</th><th>Raw mean</th><th>z</th><th>P(top {{ k }})</th><th></th></tr>
+    <tr><th>Rank</th><th>Raw rank</th><th>Change</th><th>Project</th><th>Reviews</th><th>Raw mean</th><th>z</th><th>P(top {{ k }})</th><th title="Rank if each judge's mean and spread are shrunk toward everyone's (advisory; see JUDGING.md)">Shrunk rank</th><th></th></tr>
     {% for r in results %}
     {% set delta = r.raw_rank - r.rank %}
     <tr><td>{{ r.rank }}</td><td>{{ r.raw_rank }}</td>
@@ -75,6 +75,8 @@
       <td>{{ "%.3f"|format(r.z) if r.z is not none else "" }}</td>
       {% set c = confidence.projects[r.project] if confidence else none %}
       <td>{{ "%.3f"|format(c.p_top_k) if c and not c.unreviewed else "" }}</td>
+      {% set sr = shrunk.get(r.project) %}
+      <td>{{ sr if sr else "" }}{% if sr and (sr <= k) != (r.rank <= k) %} <span class="flag" title="In the top {{ k }} under one normalization but not the other: this prize placing depends on judges with few reviews">prize line moves</span>{% endif %}</td>
       <td>{% if c and c.close_call %}<span class="flag">close call</span> {% endif %}{% if r.low_confidence %}<span class="flag">low confidence</span>{% endif %}</td></tr>
     {% endfor %}
   </table></div>

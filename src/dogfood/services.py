@@ -250,7 +250,7 @@ def analysis(conn, event_id: str, k: int) -> dict:
     """
     weights, reviews, canonical, meta, excluded = _scoring_inputs(conn, event_id)
     if not weights:
-        return {"results": [], "meta": meta, "confidence": None, "agreement": [], "favoritism": [],
+        return {"results": [], "meta": meta, "confidence": None, "agreement": [], "favoritism": [], "shrunk": {},
                 "excluded": excluded}
     key = repr((event_id, sorted(weights.items()), reviews, canonical, sorted(excluded), k))
     cached = _ANALYSIS_CACHE.get(key)
@@ -261,17 +261,18 @@ def analysis(conn, event_id: str, k: int) -> dict:
         conf = confidence.prize_confidence(scored, res, k)
         all_scored, informative = scoring.score_reviews(weights, reviews, canonical)
         agreement_rows, flags = agreement.judge_agreement(all_scored, informative)
-        cached = (res, conf, agreement_rows, flags)
+        shrunk = scoring.shrunk_ranks(weights, counted, canonical)
+        cached = (res, conf, agreement_rows, flags, shrunk)
         with _ANALYSIS_LOCK:
             _ANALYSIS_CACHE[key] = cached
             while len(_ANALYSIS_CACHE) > 32:
                 _ANALYSIS_CACHE.pop(next(iter(_ANALYSIS_CACHE)))
-    res, conf, agreement_rows, flags = cached
+    res, conf, agreement_rows, flags, shrunk = cached
     logs.stage("analysis", "output", event_id=event_id, k=k, method=conf.method,
                close_calls=[p for p, c in conf.projects.items() if c.close_call],
                outliers=[a.judge for a in agreement_rows if a.status == "outlier"], favoritism=len(flags))
     return {"results": res, "meta": meta, "confidence": conf, "agreement": agreement_rows,
-            "favoritism": flags, "excluded": excluded}
+            "favoritism": flags, "excluded": excluded, "shrunk": shrunk}
 
 
 def progress(conn, event_id: str) -> list[dict]:

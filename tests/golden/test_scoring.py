@@ -191,3 +191,41 @@ def test_duplicate_merge_on_fixture_reviews():
     # Nothing else in the file changes.
     others = [r for r in effective_reviews(reviews, {"prj_07": "prj_41"}) if r.project not in ("prj_41",)]
     assert len(others) == sum(1 for s in data["scores"] if s["project"] not in ("prj_07", "prj_41"))
+
+
+# --- shrunk_ranks (advisory robustness check, 2026-09-27) --------------------------------------
+def _rv(j, p, **c):
+    from dogfood.core.scoring import Review
+    return Review(j, p, c)
+
+
+def test_shrunk_ranks_large_prior_approaches_raw_order():
+    # With a huge prior every judge looks like the pool: z is a shift/scale of the raw score, so
+    # the order is the raw weighted-mean order.
+    from dogfood.core.scoring import shrunk_ranks
+    reviews = [_rv("a", "p1", q=5), _rv("a", "p2", q=4), _rv("b", "p2", q=2), _rv("b", "p3", q=1),
+               _rv("c", "p3", q=3), _rv("c", "p1", q=2)]
+    # raw means: p1 3.5, p2 3.0, p3 2.0
+    assert shrunk_ranks({"q": 1}, reviews, ["p1", "p2", "p3"], prior=1e9) == {"p1": 1, "p2": 2, "p3": 3}
+
+
+def test_shrunk_ranks_two_review_judge_counts_less_than_published():
+    # Judge "tiny" scored only x=4, y=5: published z -1 and +1, a full swing from a one-point gap.
+    # Judge "big" (7 reviews: 5, 2, 1, 2, 5, 1, 2; mean 18/7, sd 1.590) gives x z = +1.527 and
+    # y z = -0.359. Published means: x (-1 + 1.527)/2 = 0.263 < y (1 - 0.359)/2 = 0.320, so tiny's
+    # swing puts y ahead. Shrinkage weighs tiny's 2 reviews less and x comes out ahead.
+    from dogfood.core.scoring import score, shrunk_ranks
+    reviews = [_rv("tiny", "x", q=4), _rv("tiny", "y", q=5), _rv("big", "x", q=5), _rv("big", "y", q=2)]
+    reviews += [_rv("big", f"f{i}", q=v) for i, v in enumerate([1, 2, 5, 1, 2])]
+    projects = ["x", "y"] + [f"f{i}" for i in range(5)]
+    published = {r.project: r.rank for r in score({"q": 1}, reviews, projects)}
+    shrunk = shrunk_ranks({"q": 1}, reviews, projects)
+    assert published["y"] < published["x"]
+    assert shrunk["x"] < shrunk["y"]
+    assert sorted(shrunk.values()) == list(range(1, 8))
+
+
+def test_shrunk_ranks_unreviewed_last_by_id():
+    from dogfood.core.scoring import shrunk_ranks
+    r = shrunk_ranks({"q": 1}, [_rv("a", "p2", q=3), _rv("a", "p1", q=4)], ["p9", "p1", "p2", "p3"])
+    assert r == {"p1": 1, "p2": 2, "p3": 3, "p9": 4}

@@ -146,3 +146,54 @@ def score(criteria: Mapping[str, float], reviews: Iterable[Review], projects: It
         for p, n, rm, z in rows
     ]
     return sorted(results, key=lambda r: r.rank)
+
+
+SHRINK_PRIOR = 3  # pseudo-reviews pulling each judge's mean and spread toward everyone's
+
+
+def shrunk_ranks(criteria: Mapping[str, float], reviews: Iterable[Review], projects: Iterable[str],
+                 prior: float = SHRINK_PRIOR) -> dict[str, int]:
+    """Advisory robustness check, never the published ranking (JUDGING.md, "Known limits").
+
+    Same method as `score`, except each judge's per-criterion mean and variance are shrunk toward
+    the pooled values of all reviews, weighted n : prior. A judge with 2 reviews then moves the
+    ranking less than one with 11, and a judge who gave one score everywhere still counts a little.
+    Projects whose rank differs a lot between this and the published ranking depend on noisy judges.
+    """
+    weights = normalize_weights(criteria)
+    project_ids = list(dict.fromkeys(projects))
+    known = set(project_ids)
+    reviews = [r for r in reviews if r.project in known]
+    by_judge: dict[str, list[Review]] = {}
+    for r in reviews:
+        by_judge.setdefault(r.judge, []).append(r)
+    pooled = {}
+    for c in weights:
+        mu_g, sd_g = _mean_sd([float(r.criteria[c]) for r in reviews]) if reviews else (0.0, 0.0)
+        pooled[c] = (mu_g, sd_g * sd_g)
+    stats = {}
+    for judge, rs in by_judge.items():
+        n = len(rs)
+        for c in weights:
+            mu_j, sd_j = _mean_sd([float(r.criteria[c]) for r in rs])
+            mu_g, var_g = pooled[c]
+            mu = (n * mu_j + prior * mu_g) / (n + prior)
+            # Pooled within-judge spread plus the spread of the judge mean around the pooled mean.
+            var = (n * (sd_j * sd_j) + prior * var_g) / (n + prior)
+            stats[(judge, c)] = (mu, sqrt(var)) if var > 0 else None
+    zs: dict[str, list[float]] = {p: [] for p in project_ids}
+    raw: dict[str, list[float]] = {p: [] for p in project_ids}
+    for r in reviews:
+        z = 0.0
+        for c, w in weights.items():
+            st = stats[(r.judge, c)]
+            if st is not None:
+                z += w * (r.criteria[c] - st[0]) / st[1]
+        zs[r.project].append(z)
+        raw[r.project].append(sum(w * r.criteria[c] for c, w in weights.items()))
+    rows = [(p, sum(zs[p]) / len(zs[p]), sum(raw[p]) / len(raw[p])) for p in project_ids if zs[p]]
+    rows.sort(key=lambda row: (-round(row[1], 12), -round(row[2], 12), row[0]))
+    ranks = {row[0]: i for i, row in enumerate(rows, 1)}
+    for i, p in enumerate(sorted(p for p in project_ids if not zs[p]), len(rows) + 1):
+        ranks[p] = i
+    return ranks

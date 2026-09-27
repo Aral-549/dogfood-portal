@@ -813,7 +813,7 @@ def organizer_home(request: Request):
             "SELECT id, url, events FROM webhooks WHERE event_id = ?", (ev["id"],))],
         "voided": {r["user_id"]: r["reason"] for r in conn.execute(
             "SELECT user_id, reason FROM voided_voters WHERE event_id = ?", (ev["id"],))},
-        "agreement": a["agreement"], "favoritism": a["favoritism"], "excluded": a["excluded"]})
+        "agreement": a["agreement"], "favoritism": a["favoritism"], "excluded": a["excluded"], "shrunk": a["shrunk"]})
 
 
 def _prize_places(raw) -> int:
