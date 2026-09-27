@@ -18,6 +18,17 @@ change in `tests/golden/` or `contracts/` for every edit:
 | `core/scoring`    | `scoring.md`                | Weighted rubric + normalization (25% score) |
 | `core/importer`   | `fixtures-import.md`        | Every other stage trusts its output         |
 | `core/csv`        | `csv-export.md`             | Organizer-facing output, injection risk     |
+| `core/confidence` | `confidence.md`             | Prize-line confidence shown to organizers   |
+| `core/agreement`  | `judge-agreement.md`        | Evidence behind judge exclusions            |
+| `core/assignment` | `lifecycle.md` case 14      | Who judges what; conflicts never paired     |
+| `core/timeutil`   | (cross-cutting rules below) | Every stored and compared timestamp         |
+| `core/public`     | `t3-public.md`              | Voting window, ballot order, tallies        |
+| `core/ratelimit`  | `t3-public.md` cases 18-20  | Abuse limits, login throttling              |
+| `core/records`    | `t4-records-widget.md`      | Signatures anyone can verify offline        |
+| `core/webhooks`   | `t4-api-webhooks-bulk.md`   | Signed outbound payloads, no score values   |
+| `core/ordinal`    | `research-advisory.md`      | Advisory ranking cross-check                |
+| `core/integrity`  | `research-advisory.md`      | Pre-announcement integrity flags            |
+| `core/planning`   | `research-advisory.md`      | Judge capacity arithmetic                   |
 
 Non-core: `gallery.md` (public read path), `acceptance.md` (the external checker contract).
 

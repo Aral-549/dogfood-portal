@@ -151,6 +151,7 @@ def test_checks():
 def test_integrity_endpoint_puts_contenders_first(tmp_path):
     with portal(tmp_path) as c:
         assert c.get("/api/v1/integrity", headers=JUDGE_A).status_code == 403
+        assert c.get("/api/v1/integrity").status_code == 401
         assert c.get("/api/v1/integrity?k=3", headers=ORGANIZER).json()["flags"] == []   # fixture is clean
         # A copy of the winner's repository submitted by another team.
         top = c.get("/api/v1/results", headers=ORGANIZER).json()[0]["project"]
