@@ -464,3 +464,14 @@ def test_duplicate_email_uses_indexed_column(tmp_path):
         assert "idx_users_email_norm" in plan
     finally:
         conn.close()
+
+
+def test_abuse_panel_shows_votes_of_flagged_accounts(tmp_path):
+    with portal(tmp_path) as c:
+        _window(c, OPEN)
+        _new_user(c, "ab@gmail.com")
+        twin = _new_user(c, "a.b+2@gmail.com")                             # flagged duplicate_email
+        assert _vote(c, twin, "prj_02").status_code == 201
+        page = c.get("/organizer", headers=ORGANIZER).text
+        row = page.split("a.b+2@gmail.com", 1)[1].split("</tr>", 1)[0]
+        assert "1 vote in this event" in row

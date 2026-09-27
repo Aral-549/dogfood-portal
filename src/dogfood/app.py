@@ -864,8 +864,9 @@ def organizer_home(request: Request):
                    "voters": conn.execute("SELECT COUNT(DISTINCT user_id) FROM votes WHERE event_id = ?",
                                           (ev["id"],)).fetchone()[0],
                    "results": _vote_tally(conn, ev["id"])[:10] if _vstate(ev, request.state.now) == "closed" else []},
-        "abuse": conn.execute("SELECT f.*, u.email FROM abuse_flags f JOIN users u ON u.id = f.user_id "
-                              "ORDER BY f.id DESC LIMIT 100").fetchall(),
+        "abuse": conn.execute("SELECT f.*, u.email, (SELECT COUNT(*) FROM votes v WHERE v.user_id = f.user_id "
+                              "AND v.event_id = ?) AS votes FROM abuse_flags f JOIN users u ON u.id = f.user_id "
+                              "ORDER BY f.id DESC LIMIT 100", (ev["id"],)).fetchall(),
         "records_count": conn.execute("SELECT COUNT(*) FROM records WHERE event_id = ?", (ev["id"],)).fetchone()[0],
         "hooks": [dict(h) | {"events": json.loads(h["events"])} for h in conn.execute(
             "SELECT id, url, events FROM webhooks WHERE event_id = ?", (ev["id"],))],

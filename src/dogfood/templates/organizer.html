@@ -125,7 +125,8 @@
   <div class="table-wrap"><table>
     <tr><th>When</th><th>Account</th><th>Flag</th><th>Detail</th><th>Votes</th></tr>
     {% for f in abuse %}<tr><td>{{ f.at }}</td><td>{{ f.email }}</td><td>{{ f.kind }}</td><td class="muted">{{ f.detail[:120] }}</td>
-      <td>{% if f.user_id in voided %}voided: {{ voided[f.user_id] }}
+      <td>{{ f.votes }} vote{{ "" if f.votes == 1 else "s" }} in this event.
+          {% if f.user_id in voided %}voided: {{ voided[f.user_id] }}
           <form class="inline" method="post" action="/organizer/voters/{{ f.user_id }}/unvoid?event={{ event.id }}"><button>Restore</button></form>
         {% else %}<form class="inline" method="post" action="/organizer/voters/{{ f.user_id }}/void?event={{ event.id }}">
             <input name="reason" placeholder="reason (required, audited)" required><button>Void votes</button></form>{% endif %}</td></tr>
