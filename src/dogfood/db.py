@@ -16,8 +16,24 @@ def connect(path: str) -> sqlite3.Connection:
     return conn
 
 
+# Columns added after the first release. Existing volumes get them at boot (migration path).
+ADDED_COLUMNS = [
+    ("events", "voting_open", "TEXT"),
+    ("events", "voting_close", "TEXT"),
+    ("events", "votes_per_voter", "INTEGER NOT NULL DEFAULT 1 CHECK (votes_per_voter >= 1)"),
+]
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    migrate(conn)
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    for table, column, ddl in ADDED_COLUMNS:
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 @contextmanager

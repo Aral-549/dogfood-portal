@@ -65,6 +65,6 @@ separate result ("People's choice"). Authorization goes through `core/authz`.
 
 ## Status
 - [x] Drafted
-- [ ] Reviewed by a human
+- [x] Reviewed by a human (approved 2026-09-27)
 - [ ] Implementation matches this contract
 - [ ] Golden tests exist for every behavior case above

@@ -154,3 +154,40 @@ CREATE TABLE IF NOT EXISTS tiebreak_assignments (
     at         TEXT NOT NULL,
     PRIMARY KEY (judge_id, project_id)
 );
+
+-- T3 public participation (contracts/t3-public.md). Event voting columns are added by db.migrate().
+CREATE TABLE IF NOT EXISTS votes (
+    event_id   TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    at         TEXT NOT NULL,
+    PRIMARY KEY (user_id, project_id)
+);
+CREATE INDEX IF NOT EXISTS idx_votes_event ON votes(event_id, user_id);
+
+CREATE TABLE IF NOT EXISTS voided_voters (
+    event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reason   TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+    by_user  TEXT NOT NULL,
+    at       TEXT NOT NULL,
+    PRIMARY KEY (event_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS comments (
+    id         INTEGER PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    body       TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 2000),
+    created_at TEXT NOT NULL,
+    deleted_at TEXT                             -- soft delete: the audit trail keeps what happened
+);
+CREATE INDEX IF NOT EXISTS idx_comments_project ON comments(project_id, created_at);
+
+CREATE TABLE IF NOT EXISTS abuse_flags (
+    id       INTEGER PRIMARY KEY,
+    user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind     TEXT NOT NULL,                     -- duplicate_email | many_accounts_one_ip
+    detail   TEXT NOT NULL DEFAULT '{}',
+    at       TEXT NOT NULL
+);

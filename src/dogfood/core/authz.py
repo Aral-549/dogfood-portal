@@ -128,3 +128,27 @@ def score_project(actor: Actor, event_id: str, assigned: bool, judging_open: boo
     if not judging_open:
         return Decision.FORBIDDEN, "judging_closed"
     return Decision.ALLOW, None
+
+
+def cast_vote(actor: Actor, event_id: str, state: str, project_team_id: str) -> tuple[Decision, str | None]:
+    """Order: login, window, judges, conflict. Limits are checked by the caller in a transaction."""
+    if (d := _require_login(actor)) is not None:
+        return d, "unauthenticated"
+    if state != "open":
+        return Decision.FORBIDDEN, "voting_closed"
+    if actor.judge_id(event_id):
+        return Decision.FORBIDDEN, "judges_do_not_vote"
+    if actor.team_id(event_id) == project_team_id:
+        return Decision.FORBIDDEN, "conflict_of_interest"
+    return Decision.ALLOW, None
+
+
+def read_vote_results(state: str) -> tuple[Decision, str | None]:
+    """Nobody, organizers included, sees tallies before the window closes."""
+    return (Decision.ALLOW, None) if state == "closed" else (Decision.FORBIDDEN, "results_hidden")
+
+
+def delete_comment(actor: Actor, event_id: str, author_id: str) -> Decision:
+    if (d := _require_login(actor)) is not None:
+        return d
+    return Decision.ALLOW if actor.user_id == author_id or actor.is_organizer(event_id) else Decision.FORBIDDEN

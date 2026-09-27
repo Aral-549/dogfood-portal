@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import sqlite3
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -20,6 +21,8 @@ from . import boot, db, logs, services as svc
 from .core import authz, csvexport
 from .core.assignment import auto_assign
 from .core.confidence import tiebreak_assign
+from .core.public import ballot_order, normalize_email, tally, voting_state
+from .core.ratelimit import SlidingWindow
 from .core.authz import Actor, Decision
 from .core.deadline import submissions_open
 from .core.timeutil import format_utc, parse_utc
@@ -37,6 +40,10 @@ async def lifespan(app: FastAPI):
     previous = (getattr(app.state, "conn", None), getattr(app.state, "db_path", None))
     conn = app.state.conn = boot.boot()  # boot-time connection; requests open their own
     app.state.db_path = boot.db_path()
+    app.state.limits = {  # contracts/t3-public.md cases 18-20; in memory, cleared by a restart
+        "vote": SlidingWindow(10, 60), "comment": SlidingWindow(5, 60),
+        "login_fail": SlidingWindow(5, 300), "register_ip": SlidingWindow(3, 3600),
+    }
     yield
     conn.close()
     app.state.conn, app.state.db_path = previous
@@ -248,8 +255,13 @@ async def login(request: Request):
     nxt = data.get("next") or "/me"
     nxt = nxt if isinstance(nxt, str) and nxt.startswith("/") and not nxt.startswith("//") else "/me"
     conn = conn_of(request)
+    fails = request.app.state.limits["login_fail"]
+    blocked, retry = fails.blocked(email, _mono())
+    if blocked:
+        return _too_many(request, retry, "too many failed logins for this email")
     row = conn.execute("SELECT id, password_hash FROM users WHERE email = ?", (email,)).fetchone()
     if not await run_in_threadpool(svc.check_password, password, row["password_hash"] if row else None):
+        fails.hit(email, _mono())
         logs.stage("auth", "login_failed", request_id=request.state.request_id)
         return render(request, "login.html", {"error": "Wrong email or password.", "next": nxt}, status=401)
     token = svc.create_session(conn, row["id"])
@@ -288,10 +300,45 @@ async def register(request: Request):
                       format_utc(request.state.now)))
     except sqlite3.IntegrityError:
         return render(request, "register.html", {"error": "That email already has an account."}, status=409)
+    _registration_flags(request, conn, uid, email)
     token = svc.create_session(conn, uid)
     resp = RedirectResponse("/me", status_code=303)
     resp.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=14 * 86400)
     return resp
+
+
+def _mono() -> float:
+    return time.monotonic()
+
+
+def _too_many(request: Request, retry: float, reason: str):
+    logs.stage("abuse", "rate_limited", request_id=request.state.request_id, path=request.url.path, reason=reason)
+    return JSONResponse({"error": "rate_limited", "detail": reason}, status_code=429,
+                        headers={"Retry-After": str(max(1, int(retry + 0.999)))})
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _registration_flags(request: Request, conn, uid: str, email: str) -> None:
+    """Flag, never block: shared IPs (campus NAT) and plus-addresses are normal."""
+    norm = normalize_email(email)
+    twins = [r["id"] for r in conn.execute("SELECT id, email FROM users WHERE id != ?", (uid,))
+             if normalize_email(r["email"]) == norm]
+    ip = _client_ip(request)
+    by_ip = request.app.state.limits["register_ip"]
+    ip_ok, _ = by_ip.hit(ip, _mono())
+    flags = []
+    if twins:
+        flags.append(("duplicate_email", {"matches": twins, "normalized": norm}))
+    if not ip_ok:
+        flags.append(("many_accounts_one_ip", {"ip": ip}))
+    for kind, detail in flags:
+        with db.transaction(conn):
+            conn.execute("INSERT INTO abuse_flags (user_id, kind, detail, at) VALUES (?, ?, ?, ?)",
+                         (uid, kind, json.dumps(detail), format_utc(request.state.now)))
+            svc.audit(conn, uid, None, "abuse.flag", uid, kind=kind, **detail)
 
 
 @app.get("/set-password/{token}", response_class=HTMLResponse)
@@ -407,7 +454,11 @@ def project_page(request: Request, project_id: str):
         return render(request, "message.html", {"title": "Not found", "message": "No such project."}, status=404)
     ev = svc.get_event(conn, p["event_id"])
     can_edit = own and submissions_open(svc.event_close(ev), request.state.now)
-    return render(request, "project.html", {"p": p, "can_edit": can_edit})
+    comments = conn.execute("SELECT c.id, c.body, c.created_at, c.user_id, COALESCE(NULLIF(u.name, ''), 'A participant') "
+                            "AS author FROM comments c JOIN users u ON u.id = c.user_id "
+                            "WHERE c.project_id = ? AND c.deleted_at IS NULL ORDER BY c.id", (project_id,)).fetchall()
+    return render(request, "project.html", {"p": p, "can_edit": can_edit, "comments": comments,
+                                            "is_organizer": actor.is_organizer(p["event_id"])})
 
 
 def _validate_project(data: dict, conn, event_id: str) -> tuple[dict | None, str | None]:
@@ -628,6 +679,12 @@ def organizer_home(request: Request):
         "rubric": svc.rubric(conn, ev["id"]), "audit": audit_rows, "judges": judges, "tracks": tracks,
         "links": request.query_params.get("link"), "k": k, "confidence": a["confidence"],
         "is_checker_event": ev["id"] == svc.default_event_id(conn),
+        "voting": {"state": _vstate(ev, request.state.now),
+                   "total": conn.execute("SELECT COUNT(*) FROM votes WHERE event_id = ?", (ev["id"],)).fetchone()[0]},
+        "abuse": conn.execute("SELECT f.*, u.email FROM abuse_flags f JOIN users u ON u.id = f.user_id "
+                              "ORDER BY f.id DESC LIMIT 100").fetchall(),
+        "voided": {r["user_id"]: r["reason"] for r in conn.execute(
+            "SELECT user_id, reason FROM voided_voters WHERE event_id = ?", (ev["id"],))},
         "agreement": a["agreement"], "favoritism": a["favoritism"], "excluded": a["excluded"]})
 
 
@@ -750,12 +807,23 @@ async def update_event(request: Request):
     data, conn = await body_of(request), conn_of(request)
     changes = {}
     try:
-        for key in ("submissions_close", "judging_close"):
+        for key in ("submissions_close", "judging_close", "voting_open", "voting_close"):
             raw = clean(data.get(key), 40)
             if raw:
                 changes[key] = format_utc(parse_utc(raw))
-    except ValueError as e:
+        if "votes_per_voter" in data and str(data["votes_per_voter"]).strip():
+            vpv = int(str(data["votes_per_voter"]).strip())
+            if not 1 <= vpv <= 100:
+                raise ValueError("votes_per_voter must be between 1 and 100")
+            changes["votes_per_voter"] = vpv
+    except (ValueError, OverflowError) as e:
         return JSONResponse({"error": "invalid", "detail": str(e)}, status_code=422)
+    v_open = changes.get("voting_open", ev["voting_open"])
+    v_close = changes.get("voting_close", ev["voting_close"])
+    if bool(v_open) != bool(v_close) and ("voting_open" in changes or "voting_close" in changes):
+        return JSONResponse({"error": "invalid", "detail": "set both voting_open and voting_close"}, status_code=422)
+    if v_open and v_close and parse_utc(v_close) <= parse_utc(v_open):
+        return JSONResponse({"error": "invalid", "detail": "voting_close must be after voting_open"}, status_code=422)
     for key in ("name", "prizes"):
         if isinstance(data.get(key), str):
             changes[key] = clean(data[key], 2000)
@@ -897,3 +965,216 @@ async def publish(request: Request):
     svc.audit(conn_of(request), actor_of(request), ev["id"], "results.publish" if value else "results.unpublish",
               ev["id"])
     return RedirectResponse(f"/organizer?event={ev['id']}", status_code=303)
+
+
+# --- T3: community voting (contracts/t3-public.md) ------------------------------------------
+
+def _vstate(ev, now) -> str:
+    return voting_state(ev["voting_open"], ev["voting_close"], now)
+
+
+def _ballot_projects(conn, event_id: str) -> dict[str, dict]:
+    rows = conn.execute(
+        "SELECT p.id, p.title, p.summary, p.team_id, t.name AS team, COALESCE(tr.name, '') AS track "
+        "FROM projects p JOIN teams t ON t.id = p.team_id LEFT JOIN tracks tr ON tr.id = p.track_id "
+        "WHERE p.event_id = ? AND p.status = 'submitted' AND p.superseded_by IS NULL", (event_id,)).fetchall()
+    return {r["id"]: dict(r) for r in rows}
+
+
+def _ballot(request: Request, ev) -> dict:
+    conn, actor = conn_of(request), actor_of(request)
+    projects = _ballot_projects(conn, ev["id"])
+    mine = {r["project_id"] for r in conn.execute(
+        "SELECT project_id FROM votes WHERE event_id = ? AND user_id = ?", (ev["id"], actor.user_id))}
+    order = ballot_order(ev["id"], actor.user_id, projects)
+    return {"event": ev["id"], "state": _vstate(ev, request.state.now),
+            "voting_open": ev["voting_open"], "voting_close": ev["voting_close"],
+            "votes_per_voter": ev["votes_per_voter"], "votes_left": max(0, ev["votes_per_voter"] - len(mine)),
+            "can_vote": not actor.judge_id(ev["id"]),
+            "projects": [{"id": p, "title": projects[p]["title"], "summary": projects[p]["summary"],
+                          "team": projects[p]["team"], "track": projects[p]["track"], "voted": p in mine,
+                          "own_team": actor.team_id(ev["id"]) == projects[p]["team_id"]} for p in order]}
+
+
+@app.get("/api/v1/ballot")
+def ballot_api(request: Request):
+    ev = event_for(request)
+    if ev is None:
+        return deny(request, Decision.NOT_FOUND)
+    if not actor_of(request).authenticated:
+        return deny(request, Decision.UNAUTHENTICATED)
+    return _ballot(request, ev)
+
+
+@app.get("/vote", response_class=HTMLResponse)
+def vote_page(request: Request):
+    ev = event_for(request)
+    if ev is None:
+        return deny(request, Decision.NOT_FOUND)
+    if not actor_of(request).authenticated:
+        return deny(request, Decision.UNAUTHENTICATED)
+    state = _vstate(ev, request.state.now)
+    results = _vote_tally(conn_of(request), ev["id"]) if state == "closed" else None
+    return render(request, "vote.html", {"ballot": _ballot(request, ev), "results": results,
+                                         "titles": {p: m["title"] for p, m in
+                                                    _ballot_projects(conn_of(request), ev["id"]).items()}})
+
+
+def _vote_tally(conn, event_id: str) -> list[dict]:
+    votes = conn.execute("SELECT user_id, project_id FROM votes WHERE event_id = ?", (event_id,)).fetchall()
+    voided = {r["user_id"] for r in conn.execute("SELECT user_id FROM voided_voters WHERE event_id = ?", (event_id,))}
+    return tally(((v["user_id"], v["project_id"]) for v in votes), voided)
+
+
+async def _project_from_body(request: Request, project_id: str | None) -> str:
+    if project_id is not None:
+        return project_id
+    value = (await body_of(request)).get("project")
+    return value if isinstance(value, str) else ""
+
+
+@app.post("/api/v1/votes")
+@app.post("/vote/{project_id}")
+async def cast_vote(request: Request, project_id: str | None = None):
+    conn, actor, ev = conn_of(request), actor_of(request), event_for(request)
+    if ev is None:
+        return deny(request, Decision.NOT_FOUND)
+    if not actor.authenticated:
+        return deny(request, Decision.UNAUTHENTICATED)
+    pid = await _project_from_body(request, project_id)
+    project = _ballot_projects(conn, ev["id"]).get(pid)
+    if project is None:
+        return deny(request, Decision.NOT_FOUND, "not_on_ballot")
+    decision, reason = authz.cast_vote(actor, ev["id"], _vstate(ev, request.state.now), project["team_id"])
+    if not decision.allowed:
+        return deny(request, decision, reason)
+    ok, retry = request.app.state.limits["vote"].hit(actor.user_id, _mono())
+    if not ok:
+        return _too_many(request, retry, "too many votes")
+    with db.transaction(conn):
+        mine = {r["project_id"] for r in conn.execute(
+            "SELECT project_id FROM votes WHERE event_id = ? AND user_id = ?", (ev["id"], actor.user_id))}
+        if pid in mine:
+            conflict = "already_voted"
+        elif len(mine) >= ev["votes_per_voter"]:
+            conflict = "vote_limit"
+        else:
+            conflict = None
+            conn.execute("INSERT INTO votes VALUES (?, ?, ?, ?)",
+                         (ev["id"], actor.user_id, pid, format_utc(request.state.now)))
+            svc.audit(conn, actor, ev["id"], "vote.cast", pid)
+    if conflict:
+        return JSONResponse({"error": conflict}, status_code=409) if wants_json(request) else \
+            render(request, "message.html", {"title": "Vote not counted", "message": conflict}, status=409)
+    if wants_json(request):
+        return JSONResponse({"project": pid, "voted": True}, status_code=201)
+    return RedirectResponse(f"/vote?event={ev['id']}", status_code=303)
+
+
+@app.delete("/api/v1/votes/{project_id}")
+@app.post("/vote/{project_id}/withdraw")
+def withdraw_vote(request: Request, project_id: str):
+    conn, actor, ev = conn_of(request), actor_of(request), event_for(request)
+    if ev is None:
+        return deny(request, Decision.NOT_FOUND)
+    if not actor.authenticated:
+        return deny(request, Decision.UNAUTHENTICATED)
+    if _vstate(ev, request.state.now) != "open":
+        return deny(request, Decision.FORBIDDEN, "voting_closed")
+    ok, retry = request.app.state.limits["vote"].hit(actor.user_id, _mono())
+    if not ok:
+        return _too_many(request, retry, "too many votes")
+    with db.transaction(conn):
+        removed = conn.execute("DELETE FROM votes WHERE event_id = ? AND user_id = ? AND project_id = ?",
+                               (ev["id"], actor.user_id, project_id)).rowcount
+        if removed:
+            svc.audit(conn, actor, ev["id"], "vote.withdraw", project_id)
+    if not removed:
+        return deny(request, Decision.NOT_FOUND, "no_such_vote")
+    if wants_json(request):
+        return Response(status_code=204)
+    return RedirectResponse(f"/vote?event={ev['id']}", status_code=303)
+
+
+@app.get("/api/v1/votes/results")
+def vote_results(request: Request):
+    ev = event_for(request)
+    if ev is None:
+        return deny(request, Decision.NOT_FOUND)
+    decision, reason = authz.read_vote_results(_vstate(ev, request.state.now))
+    if not decision.allowed:
+        return deny(request, decision, reason)
+    return _vote_tally(conn_of(request), ev["id"])
+
+
+@app.post("/organizer/voters/{user_id}/void")
+@app.post("/organizer/voters/{user_id}/unvoid")
+async def set_voter_void(request: Request, user_id: str):
+    ev, denied = _organizer_guard(request)
+    if denied:
+        return denied
+    conn = conn_of(request)
+    if not conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone():
+        return deny(request, Decision.NOT_FOUND)
+    if request.url.path.endswith("/void"):
+        reason = clean((await body_of(request)).get("reason"), 1000)
+        if not reason:
+            return JSONResponse({"error": "invalid", "detail": "a reason is required"}, status_code=422)
+        with db.transaction(conn):
+            conn.execute("INSERT INTO voided_voters VALUES (?, ?, ?, ?, ?) ON CONFLICT(event_id, user_id) DO UPDATE "
+                         "SET reason = excluded.reason", (ev["id"], user_id, reason, actor_of(request).user_id,
+                                                          format_utc(request.state.now)))
+            svc.audit(conn, actor_of(request), ev["id"], "vote.void", user_id, reason=reason)
+    else:
+        with db.transaction(conn):
+            if conn.execute("DELETE FROM voided_voters WHERE event_id = ? AND user_id = ?",
+                            (ev["id"], user_id)).rowcount:
+                svc.audit(conn, actor_of(request), ev["id"], "vote.unvoid", user_id)
+    return RedirectResponse(f"/organizer?event={ev['id']}", status_code=303)
+
+
+# --- T3: comments ---------------------------------------------------------------------------------------
+
+@app.post("/projects/{project_id}/comments")
+@app.post("/api/v1/projects/{project_id}/comments")
+async def add_comment(request: Request, project_id: str):
+    conn, actor = conn_of(request), actor_of(request)
+    if not actor.authenticated:
+        return deny(request, Decision.UNAUTHENTICATED)
+    p = conn.execute("SELECT event_id FROM projects WHERE id = ? AND status = 'submitted'", (project_id,)).fetchone()
+    if p is None:
+        return deny(request, Decision.NOT_FOUND)
+    raw = (await body_of(request)).get("body")
+    body = raw.strip() if isinstance(raw, str) else ""
+    if not 1 <= len(body) <= 2000:
+        return JSONResponse({"error": "invalid", "detail": "comment must be 1 to 2000 characters"}, status_code=422)
+    ok, retry = request.app.state.limits["comment"].hit(actor.user_id, _mono())
+    if not ok:
+        return _too_many(request, retry, "too many comments")
+    with db.transaction(conn):
+        cid = conn.execute("INSERT INTO comments (project_id, user_id, body, created_at) VALUES (?, ?, ?, ?)",
+                           (project_id, actor.user_id, body, format_utc(request.state.now))).lastrowid
+        svc.audit(conn, actor, p["event_id"], "comment.create", str(cid), project=project_id)
+    if wants_json(request) or "application/json" in request.headers.get("content-type", ""):
+        return JSONResponse({"id": cid, "project": project_id, "body": body}, status_code=201)
+    return RedirectResponse(f"/projects/{project_id}#comments", status_code=303)
+
+
+@app.delete("/api/v1/comments/{comment_id}")
+@app.post("/comments/{comment_id}/delete")
+def delete_comment(request: Request, comment_id: int):
+    conn, actor = conn_of(request), actor_of(request)
+    c = conn.execute("SELECT c.id, c.user_id, c.project_id, p.event_id FROM comments c "
+                     "JOIN projects p ON p.id = c.project_id WHERE c.id = ? AND c.deleted_at IS NULL",
+                     (comment_id,)).fetchone()
+    if c is None:
+        return deny(request, Decision.NOT_FOUND)
+    decision = authz.delete_comment(actor, c["event_id"], c["user_id"])
+    if not decision.allowed:
+        return deny(request, decision)
+    with db.transaction(conn):
+        conn.execute("UPDATE comments SET deleted_at = ? WHERE id = ?", (format_utc(request.state.now), comment_id))
+        svc.audit(conn, actor, c["event_id"], "comment.delete", str(comment_id), project=c["project_id"])
+    if wants_json(request):
+        return Response(status_code=204)
+    return RedirectResponse(f"/projects/{c['project_id']}#comments", status_code=303)

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Vote{% endblock %}
+{% block content %}
+<h1>Community vote</h1>
+{% set b = ballot %}
+{% if b.state == "unset" %}<p>Community voting has not been set up for this event.</p>
+{% elif b.state == "before" %}<p>Voting opens {{ b.voting_open }}.</p>
+{% elif b.state == "closed" %}
+  <p>Voting closed {{ b.voting_close }}.</p>
+  <h2>People's choice</h2>
+  <div class="table-wrap"><table><tr><th>Project</th><th>Votes</th></tr>
+  {% for r in results %}<tr><td>{{ titles.get(r.project, r.project) }}</td><td>{{ r.votes }}</td></tr>
+  {% else %}<tr><td colspan="2" class="muted">No votes.</td></tr>{% endfor %}</table></div>
+{% else %}
+  {% if not b.can_vote %}<p>Judges of this event do not vote.</p>
+  {% else %}
+  <p>Voting closes {{ b.voting_close }}. You have {{ b.votes_left }} of {{ b.votes_per_voter }} vote{{ "" if b.votes_per_voter == 1 else "s" }} left.
+    Your ballot is shown in an order unique to you. Tallies stay hidden until voting closes.</p>
+  <div class="grid">
+  {% for p in b.projects %}
+    <article class="card">
+      <h3><a href="/projects/{{ p.id }}">{{ p.title }}</a></h3>
+      <p>{{ p.summary }}</p><p class="muted">{{ p.team }} &middot; {{ p.track or "No track" }}</p>
+      {% if p.own_team %}<p class="muted">Your team</p>
+      {% elif p.voted %}<form method="post" action="/vote/{{ p.id }}/withdraw?event={{ b.event }}"><button>Withdraw vote</button></form>
+      {% elif b.votes_left %}<form method="post" action="/vote/{{ p.id }}?event={{ b.event }}"><button>Vote</button></form>{% endif %}
+    </article>
+  {% endfor %}
+  </div>
+  {% endif %}
+{% endif %}
+{% endblock %}

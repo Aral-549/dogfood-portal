@@ -16,6 +16,9 @@
     <label>Submissions close (UTC) <input name="submissions_close" value="{{ event.submissions_close }}"></label>
     <label>Judging close (UTC) <input name="judging_close" value="{{ event.judging_close or '' }}"></label>
     <label>Prizes <input name="prizes" value="{{ event.prizes }}"></label>
+    <label>Voting opens (UTC) <input name="voting_open" value="{{ event.voting_open or '' }}"></label>
+    <label>Voting closes (UTC) <input name="voting_close" value="{{ event.voting_close or '' }}"></label>
+    <label>Votes per voter <input name="votes_per_voter" value="{{ event.votes_per_voter }}" size="3"></label>
     <button>Save</button>
   </form>
   <form method="post" action="/organizer/publish?event={{ event.id }}" class="row">
@@ -105,6 +108,22 @@
             <input name="reason" placeholder="reason (required, audited)" required maxlength="1000"><button>Exclude</button></form>
         {% endif %}</td></tr>
     {% endfor %}
+  </table></div>
+</section>
+
+<section class="card">
+  <h2>Community vote</h2>
+  <p>Voting is <strong>{{ voting.state }}</strong>. {{ voting.total }} vote{{ "" if voting.total == 1 else "s" }} cast.
+    {% if voting.state != "closed" %}Per-project tallies stay hidden from everyone, organizers included, until voting closes.{% endif %}</p>
+  <h3>Abuse flags</h3>
+  <div class="table-wrap"><table>
+    <tr><th>When</th><th>Account</th><th>Flag</th><th>Detail</th><th>Votes</th></tr>
+    {% for f in abuse %}<tr><td>{{ f.at }}</td><td>{{ f.email }}</td><td>{{ f.kind }}</td><td class="muted">{{ f.detail[:120] }}</td>
+      <td>{% if f.user_id in voided %}voided: {{ voided[f.user_id] }}
+          <form class="inline" method="post" action="/organizer/voters/{{ f.user_id }}/unvoid?event={{ event.id }}"><button>Restore</button></form>
+        {% else %}<form class="inline" method="post" action="/organizer/voters/{{ f.user_id }}/void?event={{ event.id }}">
+            <input name="reason" placeholder="reason (required, audited)" required><button>Void votes</button></form>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="5" class="muted">No flags.</td></tr>{% endfor %}
   </table></div>
 </section>
 

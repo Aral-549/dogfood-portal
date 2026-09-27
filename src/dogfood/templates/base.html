@@ -36,6 +36,7 @@ section { margin:1.5rem 0; }
   <nav>
     <a href="/projects">Gallery</a>
     <a href="/results">Results</a>
+    <a href="/vote">Vote</a>
     {% if actor.authenticated %}
       <a href="/me">My event</a>
       {% if event and actor.judge_id(event.id) %}<a href="/judge">Judging</a>{% endif %}

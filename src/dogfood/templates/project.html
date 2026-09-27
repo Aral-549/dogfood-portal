@@ -6,4 +6,19 @@
 <p class="muted">{{ p.team }} &middot; {{ p.track or "No track" }} &middot; {{ p.status }}{% if p.submitted_at %} &middot; submitted {{ p.submitted_at }}{% endif %}</p>
 {% if p.repo_url %}<p><a href="{{ p.repo_url }}" rel="nofollow noopener">Repository</a></p>{% endif %}
 {% if can_edit %}<p><a href="/projects/{{ p.id }}/edit">Edit</a></p>{% endif %}
+<section id="comments">
+  <h2>Comments</h2>
+  {% for c in comments %}
+  <div class="card"><p>{{ c.body }}</p>
+    <p class="muted">{{ c.author }} &middot; {{ c.created_at }}
+    {% if actor.user_id == c.user_id or is_organizer %}
+      <form class="inline" method="post" action="/comments/{{ c.id }}/delete"><button>Delete</button></form>
+    {% endif %}</p></div>
+  {% else %}<p class="muted">No comments yet.</p>{% endfor %}
+  {% if actor.authenticated and p.status == "submitted" %}
+  <form method="post" action="/projects/{{ p.id }}/comments" class="row">
+    <textarea name="body" rows="2" cols="60" maxlength="2000" required></textarea><button>Comment</button>
+  </form>
+  {% elif not actor.authenticated %}<p><a href="/login?next=/projects/{{ p.id }}">Log in</a> to comment.</p>{% endif %}
+</section>
 {% endblock %}
