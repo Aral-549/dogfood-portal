@@ -5,6 +5,7 @@ Pure helpers; delivery (network, retries) lives in dogfood.webhook_worker.
 
 import hashlib
 import hmac
+import ipaddress
 import json
 from urllib.parse import urlsplit
 
@@ -20,6 +21,13 @@ def validate(url, secret, events) -> str | None:
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         return "url must be http(s) with a host"
+    try:
+        ip = ipaddress.ip_address(parts.hostname)
+    except ValueError:
+        ip = None
+    if ip is not None and (ip.is_link_local or ip.is_multicast or ip.is_unspecified):
+        # 169.254.169.254 is the cloud metadata service. The portal itself (loopback) stays allowed.
+        return "url must not point at a link-local, multicast or unspecified address"
     if not isinstance(secret, str) or len(secret) < MIN_SECRET:
         return f"secret must be at least {MIN_SECRET} characters"
     if not isinstance(events, list) or not events or not all(isinstance(e, str) and e in EVENTS for e in events):

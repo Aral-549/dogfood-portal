@@ -44,6 +44,9 @@ moved in and out of the portal. Authorization is unchanged: every API route asks
 - A webhook URL pointing at the portal itself is allowed (useful for testing) and must not deadlock.
 - API tokens are exempt from the cookie CSRF check (browsers never attach them automatically).
 - The acceptance checker's routes and `.dogfood.toml` are unchanged.
+- Added 2026-09-27: import refuses (409 `ids_in_use`) a file whose track/judge/team/project ids belong to another event; a failure after the core import undoes the whole event (422).
+- Added 2026-09-27: export also carries `assignments` (pending ones too), `drafts`, `organizers` and `voided_voters`; import restores those plus `comments`, `votes` and the rubric weights (the rubric itself when no scores exist yet).
+- Added 2026-09-27: deliveries are sent up to 8 at a time (a dead receiver cannot delay the others); redirects count as failed attempts and are not followed; link-local (cloud metadata), multicast and unspecified addresses are refused at creation; finished deliveries older than 30 days are pruned.
 
 ## Explicitly out of scope
 - OAuth / third-party apps; per-token scopes narrower than the creator's roles.

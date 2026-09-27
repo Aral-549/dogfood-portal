@@ -321,12 +321,74 @@ def export_event(conn, ev, voting_closed: bool) -> dict:
             "SELECT c.project_id AS project, u.email AS author, c.body, c.created_at FROM comments c "
             "JOIN users u ON u.id = c.user_id JOIN projects p ON p.id = c.project_id "
             "WHERE p.event_id = ? AND c.deleted_at IS NULL ORDER BY c.id", (eid,))],
+        # Beyond the fixtures shape, so a move mid-event loses nothing: pending assignments,
+        # drafts, co-organizers, voided voters.
+        "assignments": [{"judge": r[0], "project": r[1]} for r in conn.execute(
+            "SELECT a.judge_id, a.project_id FROM assignments a JOIN judges j ON j.id = a.judge_id "
+            "WHERE j.event_id = ? ORDER BY 1, 2", (eid,))],
+        "drafts": [{"id": p["id"], "team": p["team_id"], "track": p["track_id"], "title": p["title"],
+                    "summary": p["summary"], "repo_url": p["repo_url"]}
+                   for p in conn.execute("SELECT * FROM projects WHERE event_id = ? AND status = 'draft' "
+                                         "ORDER BY id", (eid,))],
+        "organizers": [r[0] for r in conn.execute(
+            "SELECT u.email FROM organizers o JOIN users u ON u.id = o.user_id WHERE o.event_id = ? "
+            "ORDER BY u.email", (eid,))],
+        "voided_voters": [dict(r) for r in conn.execute(
+            "SELECT u.email AS voter, v.reason, v.at FROM voided_voters v JOIN users u ON u.id = v.user_id "
+            "WHERE v.event_id = ? ORDER BY u.email", (eid,))],
     }
     if voting_closed:  # tallies stay hidden until the window closes, exports included
         out["votes"] = [dict(r) for r in conn.execute(
             "SELECT u.email AS voter, v.project_id AS project, v.at FROM votes v JOIN users u ON u.id = v.user_id "
             "WHERE v.event_id = ? ORDER BY v.at", (eid,))]
     return out
+
+
+def _list_of(data: dict, key: str) -> list:
+    value = data.get(key)
+    return value if isinstance(value, list) else []
+
+
+def _import_people_and_activity(conn, event_id: str, data: dict, stamp: str) -> None:
+    """Assignments, drafts, organizers, comments, votes, voided voters. Rows that do not fit the
+    event are skipped (like the importer's rejected rows), never written half-way."""
+    from .core.importer import _ensure_user
+    judges = {r[0] for r in conn.execute("SELECT id FROM judges WHERE event_id = ?", (event_id,))}
+    teams = {r[0] for r in conn.execute("SELECT id FROM teams WHERE event_id = ?", (event_id,))}
+    tracks = {r[0] for r in conn.execute("SELECT id FROM tracks WHERE event_id = ?", (event_id,))}
+    for d in _list_of(data, "drafts"):
+        if isinstance(d, dict) and isinstance(d.get("id"), str) and d["id"].strip() and d.get("team") in teams \
+                and isinstance(d.get("title"), str) and d["title"].strip():
+            conn.execute("INSERT OR IGNORE INTO projects (id, event_id, team_id, track_id, title, summary, repo_url, "
+                         "status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)",
+                         (d["id"], event_id, d["team"], d.get("track") if d.get("track") in tracks else None,
+                          d["title"][:200], str(d.get("summary") or "")[:2000], str(d.get("repo_url") or "")[:2000],
+                          stamp, stamp))
+    projects = {r[0] for r in conn.execute("SELECT id FROM projects WHERE event_id = ?", (event_id,))}
+    for a in _list_of(data, "assignments"):
+        if isinstance(a, dict) and a.get("judge") in judges and a.get("project") in projects:
+            conn.execute("INSERT OR IGNORE INTO assignments VALUES (?, ?)", (a["judge"], a["project"]))
+
+    def user(email):
+        return _ensure_user(conn, email, "", stamp) if isinstance(email, str) and "@" in email else None
+
+    for email in _list_of(data, "organizers"):
+        if (uid := user(email)):
+            conn.execute("INSERT OR IGNORE INTO organizers VALUES (?, ?)", (event_id, uid))
+    for c in _list_of(data, "comments"):
+        if isinstance(c, dict) and c.get("project") in projects and isinstance(c.get("body"), str) \
+                and 1 <= len(c["body"].strip()) <= 2000 and (uid := user(c.get("author"))):
+            conn.execute("INSERT INTO comments (project_id, user_id, body, created_at) VALUES (?, ?, ?, ?)",
+                         (c["project"], uid, c["body"].strip(), str(c.get("created_at") or stamp)[:40]))
+    for v in _list_of(data, "votes"):
+        if isinstance(v, dict) and v.get("project") in projects and (uid := user(v.get("voter"))):
+            conn.execute("INSERT OR IGNORE INTO votes VALUES (?, ?, ?, ?)",
+                         (event_id, uid, v["project"], str(v.get("at") or stamp)[:40]))
+    for v in _list_of(data, "voided_voters"):
+        if isinstance(v, dict) and isinstance(v.get("reason"), str) and v["reason"].strip() \
+                and (uid := user(v.get("voter"))):
+            conn.execute("INSERT OR IGNORE INTO voided_voters VALUES (?, ?, ?, ?, ?)",
+                         (event_id, uid, v["reason"][:1000], "import", str(v.get("at") or stamp)[:40]))
 
 
 def apply_import_extras(conn, event_id: str, data: dict, actor: Actor, now: datetime) -> None:
@@ -348,12 +410,20 @@ def apply_import_extras(conn, event_id: str, data: dict, actor: Actor, now: date
         vpv = ev.get("votes_per_voter")
         if isinstance(vpv, int) and not isinstance(vpv, bool) and 1 <= vpv <= 100:
             conn.execute("UPDATE events SET votes_per_voter = ? WHERE id = ?", (vpv, event_id))
-        for pos, c in enumerate(data.get("rubric") or []):
-            if isinstance(c, dict) and isinstance(c.get("name"), str):
+        # The importer derives the rubric from score rows; an event exported before any scoring
+        # has none, so its rubric comes from here (criteria only added while no reviews exist).
+        has_reviews = conn.execute("SELECT 1 FROM reviews r JOIN judges j ON j.id = r.judge_id "
+                                   "WHERE j.event_id = ? LIMIT 1", (event_id,)).fetchone()
+        for pos, c in enumerate(_list_of(data, "rubric")):
+            if isinstance(c, dict) and isinstance(c.get("name"), str) and c["name"].strip():
                 w = c.get("weight")
-                if isinstance(w, (int, float)) and not isinstance(w, bool) and 0 < w <= 1000:
-                    conn.execute("UPDATE criteria SET weight = ?, position = ? WHERE event_id = ? AND name = ?",
-                                 (float(w), pos, event_id, c["name"]))
+                w = float(w) if isinstance(w, (int, float)) and not isinstance(w, bool) and 0 < w <= 1000 else 1.0
+                if not has_reviews:
+                    conn.execute("INSERT OR IGNORE INTO criteria (event_id, name, weight, position) VALUES (?, ?, ?, ?)",
+                                 (event_id, c["name"].strip()[:100], w, pos))
+                conn.execute("UPDATE criteria SET weight = ?, position = ? WHERE event_id = ? AND name = ?",
+                             (w, pos, event_id, c["name"]))
+        _import_people_and_activity(conn, event_id, data, stamp)
         for x in data.get("exclusions") or []:
             if isinstance(x, dict) and isinstance(x.get("judge_id"), str) and isinstance(x.get("reason"), str) \
                     and x["reason"].strip() and conn.execute(

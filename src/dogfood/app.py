@@ -1518,7 +1518,8 @@ def export_event(request: Request, event_id: str):
 def _foreign_ids(conn, data: dict, event_id) -> list[str]:
     """Ids in the file that already belong to some other event (tables keyed by global id)."""
     taken = []
-    for key, table in (("tracks", "tracks"), ("judges", "judges"), ("teams", "teams"), ("projects", "projects")):
+    for key, table in (("tracks", "tracks"), ("judges", "judges"), ("teams", "teams"), ("projects", "projects"),
+                       ("drafts", "projects")):
         rows = data.get(key) if isinstance(data, dict) else None
         for row in rows if isinstance(rows, list) else []:
             rid = row.get("id") if isinstance(row, dict) else None
@@ -1552,7 +1553,14 @@ async def import_event(request: Request):
         return JSONResponse({"error": "invalid", "detail": str(e)}, status_code=422)
     except sqlite3.IntegrityError as e:  # ids that already belong to another event
         return JSONResponse({"error": "conflict", "detail": str(e)}, status_code=409)
-    svc.apply_import_extras(conn, event["id"], data, actor, request.state.now)
+    try:
+        svc.apply_import_extras(conn, event["id"], data, actor, request.state.now)
+    except Exception as e:  # never leave a half-imported event behind: the core rows go too
+        logs.stage("importer", "extras_failed", event_id=event["id"], error=f"{type(e).__name__}: {e}")
+        with db.transaction(conn):
+            conn.execute("UPDATE projects SET superseded_by = NULL WHERE event_id = ?", (event["id"],))
+            conn.execute("DELETE FROM events WHERE id = ?", (event["id"],))
+        return JSONResponse({"error": "invalid", "detail": "import failed and was undone"}, status_code=422)
     return JSONResponse({"event": event["id"], "counts": report.counts, "rejected": report.rejected,
                          "duplicates": report.duplicates}, status_code=201)
 

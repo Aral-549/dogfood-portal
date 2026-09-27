@@ -57,7 +57,7 @@ def empty_portal(data_dir):
 class _Receiver:
     """A local webhook receiver: records (headers, raw body) and answers with `status`."""
 
-    def __init__(self, status=200):
+    def __init__(self, status=200, delay=0.0, location=None):
         self.hits, self.status = [], status
         outer = self
 
@@ -65,8 +65,13 @@ class _Receiver:
             def do_POST(self):
                 raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 outer.hits.append((dict(self.headers), raw))
+                time.sleep(delay)
                 self.send_response(outer.status)
+                if location:
+                    self.send_header("Location", location)
                 self.end_headers()
+
+            do_GET = do_POST
 
             def log_message(self, *a):
                 pass
@@ -251,6 +256,84 @@ def test_api_case7_unreachable_receiver_logged_and_request_not_blocked(tmp_path)
         assert d["state"] == "pending" and d["attempt_log"][0]["status"] is None and d["attempt_log"][0]["error"]
 
 
+def _worker_setup(tmp_path, urls):
+    """Portal stopped, one webhook per url, one delivery each enqueued at T0; returns (conn, worker, T0)."""
+    from dogfood import db
+    from dogfood.webhook_worker import Worker, enqueue
+    with portal(tmp_path) as c:
+        for u in urls:
+            assert c.post("/api/v1/webhooks", json={"url": u, "secret": "x" * 16, "events": ["results.published"]},
+                          headers=ORGANIZER).status_code == 201
+    t0 = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    conn = db.connect(str(tmp_path / "dogfood.db"))
+    with db.transaction(conn):
+        assert enqueue(conn, EVENT_ID, "results.published", {"event": EVENT_ID}, t0) == len(urls)
+    return conn, Worker(str(tmp_path / "dogfood.db")), t0
+
+
+def test_worker_slow_receivers_do_not_serialize(tmp_path):
+    slow = [_Receiver(delay=1.5) for _ in range(4)]
+    try:
+        conn, w, t0 = _worker_setup(tmp_path, [r.url for r in slow])
+        start = time.monotonic()
+        w.tick(conn, t0)
+        took = time.monotonic() - start
+        assert took < 4.0, took                       # one after another would take >= 6 s
+        assert [r[0] for r in conn.execute("SELECT state FROM webhook_deliveries")] == ["delivered"] * 4
+        conn.close()
+    finally:
+        for r in slow:
+            r.close()
+
+
+def test_worker_redirect_is_a_failed_attempt_not_followed(tmp_path):
+    target = _Receiver()
+    bouncer = _Receiver(status=302, location=target.url)
+    try:
+        conn, w, t0 = _worker_setup(tmp_path, [bouncer.url])
+        w.tick(conn, t0)
+        assert tuple(conn.execute("SELECT state, last_status FROM webhook_deliveries").fetchone()) == ("pending", 302)
+        assert len(bouncer.hits) == 1 and target.hits == []
+        conn.close()
+    finally:
+        target.close()
+        bouncer.close()
+
+
+def test_worker_prunes_old_finished_deliveries(tmp_path):
+    rx = _Receiver()
+    try:
+        conn, w, t0 = _worker_setup(tmp_path, [rx.url])
+        w.tick(conn, t0)
+        assert conn.execute("SELECT COUNT(*) FROM webhook_deliveries").fetchone()[0] == 1
+        from dogfood.webhook_worker import enqueue
+        from dogfood import db
+        with db.transaction(conn):
+            enqueue(conn, EVENT_ID, "results.published", {"event": EVENT_ID}, t0 + timedelta(days=31))
+        w.tick(conn, t0 + timedelta(days=31))           # delivers the new one, prunes the 31-day-old one
+        assert conn.execute("SELECT COUNT(*) FROM webhook_deliveries").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM delivery_attempts").fetchone()[0] == 1
+        conn.close()
+    finally:
+        rx.close()
+
+
+@pytest.mark.parametrize("url", ["http://169.254.169.254/latest/meta-data", "http://[fe80::1]/x", "http://0.0.0.0/x",
+                                 "http://224.0.0.1/x"])
+def test_webhook_refuses_metadata_and_odd_addresses(tmp_path, url):
+    with portal(tmp_path) as c:
+        r = c.post("/api/v1/webhooks", json={"url": url, "secret": "s" * 16, "events": ["score.submitted"]},
+                   headers=ORGANIZER)
+        assert r.status_code == 422
+
+
+def test_webhook_to_the_portal_itself_still_allowed(tmp_path):
+    with portal(tmp_path) as c:
+        r = c.post("/api/v1/webhooks", json={"url": "http://127.0.0.1:8080/healthz", "secret": "s" * 16,
+                                             "events": ["score.submitted"]}, headers=ORGANIZER)
+        assert r.status_code == 201
+
+
 def test_api_case10_no_webhooks_no_deliveries(tmp_path):
     with portal(tmp_path) as c:
         assert c.post("/api/v1/judge/scores/prj_06", json=ALL_THREES, headers=JUDGE_A).status_code == 200
@@ -331,6 +414,82 @@ def test_api_case12_13_import_conflict_malformed_and_authz(tmp_path):
         assert after == before                                                   # nothing written
         assert c.post("/api/v1/import", json=fixture, headers=PARTICIPANT).status_code == 403
         assert c.post("/api/v1/import", json=fixture).status_code == 401
+
+
+def _admin_in_empty_portal(b, capsys):
+    """create-admin via the CLI (as an operator would), returning the set-password link path."""
+    from dogfood import cli
+    b.mkdir(exist_ok=True)
+    with env(DOGFOOD_DATA=str(b)):
+        assert cli.create_admin("root@example.org") == 0
+    return "/set-password/" + capsys.readouterr().out.split("/set-password/", 1)[1].strip()
+
+
+def _admin_token(c, link):
+    assert c.post(link, data={"password": "root-password"}).status_code == 303
+    assert c.post("/login", data={"email": "root@example.org", "password": "root-password"}).status_code == 303
+    tok = c.post("/api/v1/tokens", json={}).json()["token"]
+    c.cookies.clear()
+    return {"Authorization": f"Bearer {tok}"}
+
+
+def _key(x):
+    return json.dumps(x, sort_keys=True)
+
+
+def test_round_trip_mid_event_keeps_activity(tmp_path, capsys):
+    """Beyond case 11: drafts, pending assignments, comments, votes, voided voters and
+    co-organizers survive export -> import (a move in the middle of an event)."""
+    a, b = tmp_path / "a", tmp_path / "b"
+    with portal(a) as c:
+        r = c.post("/api/v1/event", json={"submissions_close": "2099-01-01T00:00:00Z",
+                                          "voting_open": "2026-01-01T00:00:00Z",
+                                          "voting_close": "2099-01-01T00:00:00Z"}, headers=ORGANIZER)
+        assert r.status_code == 303
+        assert c.post("/api/v1/projects", json={"title": "Half built", "draft": True},
+                      headers=PARTICIPANT).status_code == 201
+        assert c.post("/api/v1/assignments/auto", json={}, headers=ORGANIZER).status_code in (200, 303)
+        assert c.post("/api/v1/projects/prj_02/comments", json={"body": "love it\nreally"},
+                      headers=PARTICIPANT).status_code == 201
+        assert c.post("/api/v1/votes", json={"project": "prj_02"}, headers=PARTICIPANT).status_code == 201
+        uid = _db(a).execute("SELECT id FROM users WHERE email = 'priya1@example.org'").fetchone()[0]
+        assert c.post(f"/api/v1/voters/{uid}/void", json={"reason": "test"}, headers=ORGANIZER).status_code == 303
+        assert c.post("/api/v1/event", json={"voting_close": "2026-02-01T00:00:00Z"},
+                      headers=ORGANIZER).status_code == 303                    # close: votes are exported
+        exported = c.get(f"/api/v1/events/{EVENT_ID}/export.json", headers=ORGANIZER).json()
+    for k in ("drafts", "assignments", "comments", "votes", "voided_voters", "organizers"):
+        assert exported[k], k
+    assert len(exported["assignments"]) > len(exported["scores"])              # pending ones included
+    link = _admin_in_empty_portal(b, capsys)
+    with empty_portal(b) as c:
+        admin = _admin_token(c, link)
+        assert c.post("/api/v1/import", json=exported, headers=admin).status_code == 201
+        again = c.get(f"/api/v1/events/{EVENT_ID}/export.json", headers=admin).json()
+    for k in ("drafts", "assignments", "comments", "votes", "voided_voters", "rubric"):
+        strip = (lambda rows: [{kk: vv for kk, vv in r.items() if kk != "at"} for r in rows]) \
+            if k == "voided_voters" else (lambda rows: rows)
+        assert sorted(map(_key, strip(again[k]))) == sorted(map(_key, strip(exported[k]))), k
+    assert set(exported["organizers"]) <= set(again["organizers"])
+
+
+def test_round_trip_before_any_score_keeps_rubric(tmp_path, capsys):
+    a, b = tmp_path / "a", tmp_path / "b"
+    with portal(a) as c:
+        r = c.post("/api/v1/events", json={"name": "Fresh", "submissions_close": "2099-01-01T00:00:00Z",
+                                           "tracks": "Web, Hardware"}, headers=ORGANIZER)
+        eid = r.headers["location"].split("event=")[1]
+        assert c.post(f"/api/v1/rubric?event={eid}", json={"w_functionality": 2, "w_quality": 1, "w_innovation": 3},
+                      headers=ORGANIZER).status_code == 303
+        exported = c.get(f"/api/v1/events/{eid}/export.json", headers=ORGANIZER).json()
+    assert exported["scores"] == []
+    link = _admin_in_empty_portal(b, capsys)
+    with empty_portal(b) as c:
+        admin = _admin_token(c, link)
+        assert c.post("/api/v1/import", json=exported, headers=admin).status_code == 201
+        again = c.get(f"/api/v1/events/{eid}/export.json", headers=admin).json()
+    assert again["rubric"] == exported["rubric"] == [
+        {"name": "functionality", "weight": 2.0}, {"name": "quality", "weight": 1.0},
+        {"name": "innovation", "weight": 3.0}]
 
 
 # === signed records ==========================================================================

@@ -9,6 +9,7 @@ import secrets
 import threading
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from . import db, logs
@@ -17,6 +18,8 @@ from .core.timeutil import format_utc, parse_utc
 
 POLL_S = 1.0
 TIMEOUT_S = 5
+PARALLEL = 8          # sends in flight at once: one dead receiver cannot hold up everyone else's
+KEEP_DAYS = 30        # finished deliveries (and their attempt logs) older than this are pruned
 
 
 def enqueue(conn, event_id: str, event: str, data: dict, now: datetime) -> int:
@@ -65,8 +68,19 @@ class Worker:
         due = conn.execute("SELECT d.*, w.url, w.secret FROM webhook_deliveries d JOIN webhooks w "
                            "ON w.id = d.webhook_id WHERE d.state = 'pending' AND d.next_at <= ? "
                            "ORDER BY d.next_at LIMIT 20", (format_utc(now),)).fetchall()
-        for d in due:
-            self._deliver(conn, d, now)
+        if not due:
+            return
+        # Network in parallel threads; every database write stays on this thread's connection.
+        with ThreadPoolExecutor(max_workers=min(PARALLEL, len(due))) as pool:
+            outcomes = list(pool.map(_send, due))
+        for d, (status, error) in zip(due, outcomes):
+            self._record(conn, d, now, status, error)
+        self._prune(conn, now)
+
+    def _prune(self, conn, now: datetime) -> None:
+        cutoff = format_utc(now - timedelta(days=KEEP_DAYS))
+        with db.transaction(conn):
+            conn.execute("DELETE FROM webhook_deliveries WHERE state != 'pending' AND created_at < ?", (cutoff,))
 
     def _voting_closed(self, conn, now: datetime) -> None:
         for ev in conn.execute("SELECT id, voting_close FROM events WHERE voting_close IS NOT NULL "
@@ -77,20 +91,7 @@ class Worker:
                                     (ev["id"],)).rowcount:
                         enqueue(conn, ev["id"], "voting.closed", {"event": ev["id"]}, now)
 
-    def _deliver(self, conn, d, now: datetime) -> None:
-        raw = d["body"].encode("utf-8")
-        req = urllib.request.Request(d["url"], data=raw, method="POST", headers={
-            "Content-Type": "application/json", "User-Agent": "dogfood-webhooks/1",
-            "X-Dogfood-Event": d["event"], "X-Dogfood-Delivery": d["id"],
-            "X-Dogfood-Signature": webhooks.signature(d["secret"], raw)})
-        status, error = None, None
-        try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
-                status = resp.status
-        except urllib.error.HTTPError as e:
-            status = e.code
-        except Exception as e:
-            error = f"{type(e).__name__}: {e}"[:300]
+    def _record(self, conn, d, now: datetime, status, error) -> None:
         attempt = d["attempts"] + 1
         ok = status is not None and 200 <= status < 300
         if ok:
@@ -105,3 +106,32 @@ class Worker:
             conn.execute("UPDATE webhook_deliveries SET state = ?, attempts = ?, last_status = ?, last_error = ?, "
                          "next_at = ? WHERE id = ?", (state, attempt, status, error, format_utc(next_at), d["id"]))
         logs.stage("webhooks", "delivery", delivery=d["id"], attempt=attempt, status=status, state=state, error=error)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is a failed delivery: urllib would re-send the POST as a body-less GET (then
+    log 'delivered'), and following it lets a receiver bounce the portal to internal hosts."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _send(d) -> tuple[int | None, str | None]:
+    """POST one delivery. Returns (http status or None, error text or None). No database access."""
+    raw = d["body"].encode("utf-8")
+    req = urllib.request.Request(d["url"], data=raw, method="POST", headers={
+        "Content-Type": "application/json", "User-Agent": "dogfood-webhooks/1",
+        "X-Dogfood-Event": d["event"], "X-Dogfood-Delivery": d["id"],
+        "X-Dogfood-Signature": webhooks.signature(d["secret"], raw)})
+    status, error = None, None
+    try:
+        with _OPENER.open(req, timeout=TIMEOUT_S) as resp:
+            status = resp.status
+    except urllib.error.HTTPError as e:
+        status = e.code
+    except Exception as e:
+        error = f"{type(e).__name__}: {e}"[:300]
+    return status, error
