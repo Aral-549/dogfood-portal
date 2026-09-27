@@ -76,7 +76,8 @@ def prize_confidence(scored: Iterable[ScoredReview], ranking: Iterable[ProjectRe
     for p in published:
         if p in wins:
             prob = wins[p] / total
-            out[p] = ProjectConfidence(p, prob, CLOSE_LOW <= prob <= CLOSE_HIGH, False)
+            shown = round(prob, 3)  # p is reported to 3 dp; the flag must agree with what is shown
+            out[p] = ProjectConfidence(p, prob, CLOSE_LOW <= shown <= CLOSE_HIGH, False)
         else:
             out[p] = ProjectConfidence(p, 0.0, False, True)
     return ConfidenceReport(k, method, total, out)

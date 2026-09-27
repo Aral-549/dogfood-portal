@@ -83,6 +83,10 @@ def create_password_link(conn, user_id: str) -> str | None:
     row = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user_id,)).fetchone()
     if row is None or row["password_hash"]:
         return None
+    # The organizer carries these links by hand (no email). A participant's account must never be
+    # claimable by the organizer, so team members never get one (BUG-23).
+    if conn.execute("SELECT 1 FROM team_members WHERE user_id = ?", (user_id,)).fetchone():
+        return None
     token = secrets.token_urlsafe(24)
     conn.execute("INSERT INTO password_links VALUES (?, ?, ?)",
                  (_token_hash(token), user_id, format_utc(utcnow() + timedelta(days=7))))

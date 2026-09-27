@@ -71,6 +71,7 @@ def judge_agreement(scored: Iterable[ScoredReview],
         if r is None:
             report.append(JudgeAgreement(judge, shared, None, mad, "insufficient"))
         else:
-            report.append(JudgeAgreement(judge, shared, round(r, 3), mad, "outlier" if r < OUTLIER_BELOW else "ok"))
+            r = round(r, 3)  # reported to 3 dp; the status must agree with what is shown
+            report.append(JudgeAgreement(judge, shared, r, mad, "outlier" if r < OUTLIER_BELOW else "ok"))
     flags.sort(key=lambda f: (-f.gap, f.judge, f.project))
     return report, flags

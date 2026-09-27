@@ -15,7 +15,7 @@ published ranking. Persisting new assignments is handed to the web layer.
 ## Outputs
 Per project: `{project, p_top_k, close_call, unreviewed}`
 - `p_top_k`: probability in [0, 1], reported to 3 dp
-- `close_call`: `0.2 <= p_top_k <= 0.8`
+- `close_call`: `0.2 <= round(p_top_k, 3) <= 0.8`, so the flag always agrees with the value shown (clarified 2026-09-27, BUG-25)
 - `unreviewed`: project has zero reviews (then `p_top_k = 0`, `close_call = false`)
 
 Plus `method: "exact" | "monte_carlo"` and `replicates` used.

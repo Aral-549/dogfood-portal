@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
@@ -228,8 +229,8 @@ def public_results(request: Request):
                       status=404)
     res, meta = svc.results(conn_of(request), ev["id"])
     excluded = conn_of(request).execute(
-        "SELECT COUNT(*) FROM judge_exclusions x JOIN judges j ON j.id = x.judge_id WHERE j.event_id = ?",
-        (ev["id"],)).fetchone()[0]
+        "SELECT COUNT(*) FROM judge_exclusions x JOIN judges j ON j.id = x.judge_id WHERE j.event_id = ? "
+        "AND EXISTS (SELECT 1 FROM reviews r WHERE r.judge_id = x.judge_id)", (ev["id"],)).fetchone()[0]
     return render(request, "results.html", {"results": res, "meta": meta, "excluded_count": excluded})
 
 
@@ -248,7 +249,7 @@ async def login(request: Request):
     nxt = nxt if isinstance(nxt, str) and nxt.startswith("/") and not nxt.startswith("//") else "/me"
     conn = conn_of(request)
     row = conn.execute("SELECT id, password_hash FROM users WHERE email = ?", (email,)).fetchone()
-    if not svc.check_password(password, row["password_hash"] if row else None):
+    if not await run_in_threadpool(svc.check_password, password, row["password_hash"] if row else None):
         logs.stage("auth", "login_failed", request_id=request.state.request_id)
         return render(request, "login.html", {"error": "Wrong email or password.", "next": nxt}, status=401)
     token = svc.create_session(conn, row["id"])
@@ -283,7 +284,8 @@ async def register(request: Request):
     uid = "usr_" + secrets.token_hex(6)
     try:
         conn.execute("INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
-                     (uid, email, name, svc.hash_password(password), format_utc(request.state.now)))
+                     (uid, email, name, await run_in_threadpool(svc.hash_password, password),
+                      format_utc(request.state.now)))
     except sqlite3.IntegrityError:
         return render(request, "register.html", {"error": "That email already has an account."}, status=409)
     token = svc.create_session(conn, uid)
@@ -302,7 +304,7 @@ async def set_password(request: Request, token: str):
     password = password_of(await body_of(request))
     if len(password) < 8:
         return render(request, "set_password.html", {"token": token, "error": "8+ characters."}, status=422)
-    uid = svc.consume_password_link(conn_of(request), token, password)
+    uid = await run_in_threadpool(svc.consume_password_link, conn_of(request), token, password)
     if uid is None:
         return render(request, "message.html", {"title": "Link expired", "message": "This link is not valid."},
                       status=404)

@@ -79,6 +79,11 @@
   <p><strong>Possible favoritism</strong> (a review 2+ standard units above the project's other judges):
     {% for f in favoritism %}{{ f.judge }} on {{ f.project }} (+{{ "%.2f"|format(f.gap) }}){% if not loop.last %}, {% endif %}{% endfor %}</p>
   {% endif %}
+  {% set listed = agreement | map(attribute="judge") | list %}
+  {% for jid, x in excluded.items() if jid not in listed %}
+  <p>Excluded (no reviews yet): {{ jid }}: {{ x.reason }}
+    <form class="inline" method="post" action="/organizer/judges/{{ jid }}/include?event={{ event.id }}"><button>Re-include</button></form></p>
+  {% endfor %}
   <div class="table-wrap"><table>
     <tr><th>Judge</th><th>Shared</th><th>Agreement</th><th>Mean abs. deviation</th><th>Status</th><th>Results</th></tr>
     {% for a in agreement %}

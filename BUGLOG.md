@@ -119,54 +119,82 @@ Entries below come from the 2026-09-27 adversarial pass. Regression cases are in
 - **Symptom:** `{"password":"\ud800..."}` on /login, /register and every write route; `[` x100000 on any JSON route; `{"k":1e999}` on /organizer/assign: all 500.
 - **Root cause:** strings that cannot be UTF-8 encoded reached `.encode()`/sqlite; `RecursionError` and `OverflowError` were not caught.
 - **Stage/module:** HTTP input boundary (`app.body_of`)
-- **Regression case added:** pending (third verification pass)
-- **Status:** fixed, regression case pending
+- **Regression case added:** `tests/golden/test_regressions_3.py` (third verification pass; fails on the pre-fix tree 59b94a3)
+- **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-17 failed request left a transaction open, poisoning every later write
 - **Symptom:** a 500 inside `POST /organizer/events` left `in_transaction` true; every later `BEGIN IMMEDIATE` failed until restart. Under concurrency, one shared connection across threads gave "cannot start a transaction within a transaction" and rollbacks of other requests' work.
 - **Root cause:** one process-wide sqlite connection shared by the threadpool; some handlers had no rollback path.
 - **Stage/module:** db / request plumbing
 - **Regression case added:** pending (third verification pass)
-- **Status:** fixed (one connection per request, rolled back if left open; writes use `db.transaction`), regression case pending
+- **Status:** fixed (one connection per request, rolled back if left open; writes use `db.transaction`)
 
 ## 2026-09-27 -- BUG-18 event update committed without its audit row
 - **Symptom:** `POST /organizer/event` that failed after the UPDATE left a changed close date and no `event.update` audit row.
 - **Root cause:** autocommit writes before the audit call. Now one transaction (also event create, rubric, exclusions).
 - **Stage/module:** HTTP handlers / audit
-- **Regression case added:** pending (third verification pass)
-- **Status:** fixed, regression case pending
+- **Regression case added:** `tests/golden/test_regressions_3.py` (third verification pass; fails on the pre-fix tree 59b94a3)
+- **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-19 demo teardown missed volumes created by the first release
 - **Symptom:** volume from commit 0a43fb2 with demo on, rebooted on the new code with demo off: demo passwords still logged in.
 - **Root cause:** teardown only cleared the new `demo_accounts` table, which old volumes never filled. Now it backfills from demo sessions first.
 - **Stage/module:** boot
-- **Regression case added:** pending (third verification pass)
-- **Status:** fixed, regression case pending
+- **Regression case added:** `tests/golden/test_regressions_3.py` (third verification pass; fails on the pre-fix tree 59b94a3)
+- **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-20 importer rubric chosen by rows that are rejected anyway
 - **Symptom:** 127 rows with unknown judges and criteria `{x}` made the rubric `['x']` and rejected all 126 real scores; all-empty criteria imported 126 reviews with no scores.
 - **Root cause:** every row voted. Now only rows whose judge and project resolve vote; ties are reported; no rubric rejects the scores.
 - **Stage/module:** importer
-- **Regression case added:** pending (third verification pass)
-- **Status:** fixed, regression case pending
+- **Regression case added:** `tests/golden/test_regressions_3.py` (third verification pass; fails on the pre-fix tree 59b94a3)
+- **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-21 close date before year 1000 stored unpadded, then 500s
 - **Symptom:** `0999-01-01T00:00:00Z` stored as `999-01-01...`; /me and submissions then 500.
 - **Root cause:** glibc `strftime("%Y")` does not zero-pad. `format_utc` now pads explicitly.
 - **Stage/module:** core/timeutil
-- **Regression case added:** pending (third verification pass)
-- **Status:** fixed, regression case pending
+- **Regression case added:** `tests/golden/test_regressions_3.py` (third verification pass; fails on the pre-fix tree 59b94a3)
+- **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-22 smaller boot and scoring gaps
 - **Symptom:** (a) demo boot crashed if someone registered `organizer@dogfood.local`; (b) a review given before the judge joined the project's team still counted; (c) non-string `event.name` in fixtures aborted boot with a raw ProgrammingError; `event.id` of spaces was accepted.
 - **Root cause:** (a) only an id conflict was handled, now the demo organizer is skipped and logged; (b) conflicts were only checked at scoring time, now also when computing results; (c) unvalidated fixture fields.
 - **Stage/module:** boot, services, importer
-- **Regression case added:** pending (third verification pass)
+- **Regression case added:** `tests/golden/test_regressions_3.py` (third verification pass; fails on the pre-fix tree 59b94a3)
+- **Status:** fixed (regression case passes)
+
+## 2026-09-27 -- BUG-23 organizer can take over a password-less fixture participant
+- **Symptom:** inviting a fixture participant's email as a judge issued a set-password link the organizer could use themselves, then submit as that team.
+- **Root cause:** without email delivery the organizer carries set-password links by hand, so any password-less account was claimable by them. Decision (2026-09-27): team members never get a set-password link; judges who are not participants still do.
+- **Stage/module:** lifecycle / auth (`services.create_password_link`)
+- **Regression case added:** pending (fourth verification pass)
 - **Status:** fixed, regression case pending
 
-## 2026-09-27 -- BUG-23 organizer can take over a password-less fixture participant (open, by design limit)
-- **Symptom:** inviting a fixture participant's email as a judge issues a set-password link the organizer can use themselves.
-- **Root cause:** without email delivery the organizer is the courier for set-password links; any password-less account is exposed to them. Documented in README limits.
-- **Stage/module:** lifecycle / auth
-- **Regression case added:** none yet (needs a design decision: email delivery or participant self-claim)
-- **Status:** open
+## 2026-09-27 -- BUG-24 excluded judge without reviews invisible on the dashboard, but counted publicly
+- **Symptom:** excluding a freshly invited judge (no reviews) left no row or re-include button on /organizer, while /results said "Reviews from 1 judge were excluded".
+- **Root cause:** exclusions were shown only inside the agreement table (judges with reviews); the public count included judges with no reviews.
+- **Stage/module:** organizer template, public results
+- **Regression case added:** `tests/golden/test_agreement.py` -- `test_case8_dashboard_lists_exclusion_of_judge_without_reviews`
+- **Status:** fixed (regression case passes)
+
+## 2026-09-27 -- BUG-25 close-call flag disagreed with the probability shown
+- **Symptom:** `0.200,false` in the confidence CSV: raw p 0.1995 is shown as 0.200 but was not flagged.
+- **Root cause:** the flag compared the unrounded p. Now it compares the 3 dp value that is shown; p itself stays exact (sum over projects is exactly k).
+- **Stage/module:** core/confidence
+- **Regression case added:** `tests/golden/test_confidence.py` -- `test_http_close_call_flag_consistent_with_reported_p`
+- **Status:** fixed (regression case passes)
+
+## 2026-09-27 -- BUG-26 outlier status could disagree with the agreement shown
+- **Symptom:** (found by reading) r = -0.3004 would print as -0.300 yet be flagged outlier.
+- **Root cause:** status compared the unrounded r. Now it compares the 3 dp value shown.
+- **Stage/module:** core/agreement
+- **Regression case added:** pending (fourth verification pass; no exact boundary input found yet)
+- **Status:** fixed, regression case pending
+
+## 2026-09-27 -- BUG-27 logins block the whole server
+- **Symptom:** 40 concurrent logins pushed /healthz from 2 ms to 0.81 s.
+- **Root cause:** scrypt ran on the async event loop in login, register and set-password. Now it runs in the threadpool.
+- **Stage/module:** HTTP handlers
+- **Regression case added:** pending (fourth verification pass)
+- **Status:** fixed, regression case pending

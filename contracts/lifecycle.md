@@ -27,7 +27,7 @@ HTML pages / JSON, plus one `audit_log` row for every state-changing organizer o
 | 10 | admin creates an event with name, submissions_close, judging_close, tracks, prizes | event exists, creator is organizer, audit row | |
 | 11 | non-admin creates an event | 403 | |
 | 12 | organizer changes submissions_close | saved, audit row with old and new value | the only way to reopen submissions |
-| 13 | organizer invites judge by email + tracks | judge row for that event; a one-time set-password link ONLY if the account has no password yet; one transaction with its audit row | an invite can never reset an existing password (BUG-8) |
+| 13 | organizer invites judge by email + tracks | judge row for that event; a one-time set-password link ONLY if the account has no password yet AND is not a member of any team (BUG-23: the organizer must never be able to claim a participant's account); one transaction with its audit row | an invite can never reset an existing password (BUG-8) |
 | 14 | organizer runs auto-assign with k=3 | each canonical submitted project gets up to k judges from its track, lowest-load first, never a judge who is on the project's team; existing assignments kept | deterministic for the same input |
 | 15 | organizer sets rubric weights | saved; results recomputed; weights <= 0 rejected 422 | |
 | 16 | judge submits a score for an assigned project, values 1..5 for every criterion, before judging_close | saved (upsert), audit row | |

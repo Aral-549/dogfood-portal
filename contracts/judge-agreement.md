@@ -17,6 +17,7 @@ Per judge: `{judge, shared, agreement, mean_abs_dev, status}`
 - `consensus` for a review of project P by J = mean `z_r` of the other reviews of P (leave-one-out)
 - `agreement`: Pearson correlation between J's `z_r` and consensus over shared projects, 3 dp, or null
 - `mean_abs_dev`: mean `|z_r - consensus|` over shared projects, 3 dp, or null
+- Thresholds compare the reported (3 dp) agreement, so the status agrees with the value shown (clarified 2026-09-27).
 - `status`: `uninformative` | `insufficient` (shared < 4 or zero variance on either side) | `outlier` (agreement < -0.3) | `ok`
 
 Thresholds amended 2026-09-27 (human-approved): were shared < 3 and agreement < 0, which flagged 7 of 30 fixture judges, one at -0.005.
@@ -41,7 +42,7 @@ Per review flag `favoritism` when `z_r - consensus >= 2.0` (J rates P far above 
 | 8 | organizer excludes judge J with a non-empty reason | J's reviews are left out of scoring, confidence and CSV; audit row `judge.exclude` with the reason; dashboard lists the exclusion |
 | 9 | exclusion with empty reason | 422 |
 | 10 | organizer re-includes J | results return exactly to the pre-exclusion state; audit row `judge.include` |
-| 11 | public `/results` after publish with any exclusion active | shows "Reviews from N judge(s) were excluded by the organizer" (count only, no names or reasons) |
+| 11 | public `/results` after publish with any exclusion active | shows "Reviews from N judge(s) were excluded by the organizer" (count only, no names or reasons); N counts only excluded judges who have reviews |
 | 12 | judge, participant or visitor requests the report or exclusion | 403 / 403 / 401 |
 
 Excluded reviews are never deleted: exclusion is a flag on the judge for that event, so it is reversible and auditable.

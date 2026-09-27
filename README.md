@@ -77,6 +77,7 @@ event.
 - No eligibility rules beyond "submitted, not superseded, before the deadline".
 - No password reset, and no rate limiting on login. The 91 fixture participants have no
   password; only the demo participant can log in. (Judges get a set-password link
-  from the organizer; it only works for accounts that have no password yet.)
+  from the organizer; it only works for accounts that have no password yet and are
+  not on a team, so an organizer can never claim a participant's account.)
 - `/docs` (Swagger UI) is disabled because it loads from a CDN; the schema is at `/openapi.json`.
 - T3 (public voting) and T4 (API/webhooks/certificates) are not implemented.
