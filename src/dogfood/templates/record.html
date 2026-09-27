@@ -4,6 +4,7 @@
 <style>@media print { header, .noprint { display: none } main { max-width: none } .cert { border: 0 } }
 .cert { border: 2px solid var(--line); border-radius: 10px; padding: 2.5rem; text-align: center; margin: 1rem 0 }
 .cert h1 { font-size: 2rem; margin: .3rem 0 } .cert .big { font-size: 1.6rem; font-weight: 700 }</style>
+{% if row.revoked_at %}<p class="card"><strong>Revoked</strong> by the organizer on {{ row.revoked_at }}: {{ row.revoked_reason }}</p>{% endif %}
 <div class="cert">
   <p class="muted">{{ r.event_name }}</p>
   {% if r.type == "participant" %}

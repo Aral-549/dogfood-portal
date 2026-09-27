@@ -1283,7 +1283,7 @@ async def issue_records(request: Request):
     criteria = list(svc.rubric(conn, ev["id"]))
     subjects = []
     for r in conn.execute(
-            "SELECT DISTINCT m.user_id, COALESCE(NULLIF(u.name, ''), u.email) AS name, t.name AS team, "
+            "SELECT DISTINCT m.user_id, COALESCE(NULLIF(u.name, ''), substr(u.email, 1, instr(u.email, '@') - 1)) AS name, t.name AS team, "
             "MIN(p.id) AS project, p.title FROM projects p JOIN teams t ON t.id = p.team_id "
             "JOIN team_members m ON m.team_id = t.id JOIN users u ON u.id = m.user_id "
             "WHERE p.event_id = ? AND p.status = 'submitted' AND p.superseded_by IS NULL "
@@ -1291,7 +1291,7 @@ async def issue_records(request: Request):
         subjects.append((r["user_id"], "participant", {"name": r["name"], "team": r["team"],
                                                         "project": r["project"], "project_title": r["title"]}))
     for r in conn.execute(
-            "SELECT j.id, j.user_id, COALESCE(NULLIF(u.name, ''), u.email) AS name, COUNT(rv.id) AS n "
+            "SELECT j.id, j.user_id, COALESCE(NULLIF(u.name, ''), substr(u.email, 1, instr(u.email, '@') - 1)) AS name, COUNT(rv.id) AS n "
             "FROM judges j JOIN users u ON u.id = j.user_id JOIN reviews rv ON rv.judge_id = j.id "
             "WHERE j.event_id = ? GROUP BY j.id HAVING n > 0 ORDER BY j.id", (ev["id"],)):
         # Count only: which projects and what scores stay private (peer isolation).
@@ -1306,7 +1306,8 @@ async def issue_records(request: Request):
             rid = secrets.token_hex(16)
             record = {"type": kind, "record_id": rid, "event_id": ev["id"], "event_name": ev["name"],
                       "issued_at": stamp, **fields}
-            conn.execute("INSERT INTO records VALUES (?, ?, ?, ?, ?, ?, ?)",
+            conn.execute("INSERT INTO records (id, event_id, user_id, kind, payload, signature, issued_at) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?)",
                          (rid, ev["id"], user_id, kind, records.canonical(record).decode("utf-8"),
                           records.sign(boot.SIGNING_KEY, record), stamp))
             issued += 1
@@ -1326,7 +1327,10 @@ def record_json(request: Request, record_id: str):
     row, record = _record(conn_of(request), record_id)
     if row is None:
         return JSONResponse({"error": "not_found"}, status_code=404)
-    return {"record": record, "signature": row["signature"]}
+    out = {"record": record, "signature": row["signature"]}
+    if row["revoked_at"]:  # outside the signed record: the signature stays valid, the portal says revoked
+        out["revoked"] = {"at": row["revoked_at"], "reason": row["revoked_reason"]}
+    return out
 
 
 @app.get("/records/{record_id}", response_class=HTMLResponse)
@@ -1343,9 +1347,37 @@ def verify_page(request: Request, record_id: str):
     if row is None:
         return render(request, "message.html", {"title": "Not found", "message": "No such record."}, status=404)
     ok = records.verify(boot.SIGNING_KEY.public_key(), record, row["signature"])
+    if ok and row["revoked_at"]:
+        return render(request, "message.html", {
+            "title": "Record REVOKED",
+            "message": f"The signature is genuine, but the organizer revoked this record on {row['revoked_at']}: "
+                       f"{row['revoked_reason']}"})
     return render(request, "message.html", {"title": "Record " + ("valid" if ok else "INVALID"),
                                             "message": ("The signature matches this portal's public key."
                                                         if ok else "The signature does not match.")})
+
+
+@app.post("/api/v1/records/{record_id}/revoke")
+async def revoke_record(request: Request, record_id: str):
+    conn = conn_of(request)
+    row = conn.execute("SELECT event_id, revoked_at FROM records WHERE id = ?", (record_id,)).fetchone()
+    if row is None:
+        return deny(request, Decision.NOT_FOUND)
+    actor = actor_of(request)
+    if not actor.authenticated:
+        return deny(request, Decision.UNAUTHENTICATED)
+    if not actor.is_organizer(row["event_id"]):
+        return deny(request, Decision.FORBIDDEN)
+    reason = clean((await body_of(request)).get("reason"), 1000)
+    if not reason:
+        return JSONResponse({"error": "invalid", "detail": "a reason is required"}, status_code=422)
+    if row["revoked_at"]:
+        return JSONResponse({"error": "already_revoked"}, status_code=409)
+    with db.transaction(conn):
+        conn.execute("UPDATE records SET revoked_at = ?, revoked_reason = ? WHERE id = ?",
+                     (format_utc(request.state.now), reason, record_id))
+        svc.audit(conn, actor, row["event_id"], "record.revoke", record_id, reason=reason)
+    return Response(status_code=204)
 
 
 # --- T4: embeddable gallery widget ------------------------------------------------------------

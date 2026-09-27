@@ -17,12 +17,15 @@ def connect(path: str) -> sqlite3.Connection:
 
 
 # Columns added after the first release. Existing volumes get them at boot (migration path).
+# Tables listed here gain columns over time: always INSERT into them with named columns.
 ADDED_COLUMNS = [
     ("events", "voting_open", "TEXT"),
     ("events", "voting_close", "TEXT"),
     ("events", "votes_per_voter", "INTEGER NOT NULL DEFAULT 1 CHECK (votes_per_voter >= 1)"),
     ("events", "voting_closed_sent", "INTEGER NOT NULL DEFAULT 0"),
-    ("users", "email_norm", "TEXT"),  # core.public.normalize_email, filled lazily (see app._registration_flags)
+    ("users", "email_norm", "TEXT"),
+    ("records", "revoked_at", "TEXT"),
+    ("records", "revoked_reason", "TEXT"),  # core.public.normalize_email, filled lazily (see app._registration_flags)
 ]
 
 

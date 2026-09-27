@@ -44,6 +44,10 @@ Judge record: `{type: "judge", record_id, event_id, event_name, judge_id, name, 
 - A certificate page prints to one A4 page with the browser's print dialog (no PDF library).
 - The public key endpoint works with the network off.
 
+## Added 2026-09-27
+- A person without a display name is named by the part of their email before the `@`; a record never carries an email address (record pages are public and shareable).
+- `POST /api/v1/records/{id}/revoke` `{reason}` (organizer of the record's event; audited `record.revoke`; 409 if already revoked). The signature stays valid offline, but `/records/{id}.json` gains `revoked: {at, reason}` outside the signed record, and `/verify/{id}` and the certificate page say REVOKED.
+
 ## Explicitly out of scope
 - Key rotation with a published key history (documented as future work).
 - PDF generation server-side.

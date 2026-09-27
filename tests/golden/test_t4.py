@@ -587,6 +587,39 @@ def test_records_cases_1_3_4_5_6_7_8(tmp_path):
             assert "Signature Verified Successfully" not in out.stdout
 
 
+def test_records_never_carry_an_email_address(tmp_path):
+    # Record pages are public and shareable: a member without a display name gets the part of
+    # the address before the @, never the address itself.
+    with portal(tmp_path) as c:
+        c.post("/api/v1/results/publish", json={}, headers=ORGANIZER)
+        c.post("/api/v1/records/issue", headers=ORGANIZER)
+        conn = _db(tmp_path)
+        payloads = [r[0] for r in conn.execute("SELECT payload FROM records")]
+        conn.close()
+        assert payloads and not any("@" in json.loads(p)["name"] for p in payloads)
+        assert any(json.loads(p)["name"] == "member1_1" for p in payloads)
+
+
+def test_records_revocation(tmp_path):
+    with portal(tmp_path) as c:
+        c.post("/api/v1/results/publish", json={}, headers=ORGANIZER)
+        c.post("/api/v1/records/issue", headers=ORGANIZER)
+        rid = _issued(tmp_path)[0]["id"]
+        url = f"/api/v1/records/{rid}/revoke"
+        assert c.post(url, json={"reason": "x"}).status_code == 401
+        assert c.post(url, json={"reason": "x"}, headers=JUDGE_A).status_code == 403
+        assert c.post(url, json={"reason": " "}, headers=ORGANIZER).status_code == 422
+        assert c.post(url, json={"reason": "issued to the wrong team"}, headers=ORGANIZER).status_code == 204
+        assert c.post(url, json={"reason": "again"}, headers=ORGANIZER).status_code == 409
+        doc = c.get(f"/records/{rid}.json").json()
+        assert doc["revoked"]["reason"] == "issued to the wrong team"
+        pub, _ = _pub(c)
+        assert _verifies(pub, doc["record"], doc["signature"])          # genuine, but ...
+        assert "REVOKED" in c.get(f"/verify/{rid}").text                 # ... the portal says revoked
+        assert "Revoked" in c.get(f"/records/{rid}").text
+        assert _count(tmp_path, "SELECT COUNT(*) FROM audit_log WHERE action = 'record.revoke'") == 1
+
+
 def test_records_edge_non_ascii_names_sign_and_verify(tmp_path):
     from dogfood.core import records
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
