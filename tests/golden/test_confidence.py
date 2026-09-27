@@ -481,3 +481,17 @@ def test_http_close_call_flag_consistent_with_reported_p(tmp_path):
                 if x["unreviewed"] == "false" and (x["close_call"] == "true") != (0.2 <= float(x["p_top_k"]) <= 0.8):
                     bad.append((k, x["project_id"], x["p_top_k"], x["close_call"]))
         assert bad == []
+
+
+# --- fast resampling (2026-09-27): identical to the definition, draw for draw -------------------
+def test_fast_resampling_equals_reference_draw_for_draw():
+    import random as _random
+    from dogfood.core.confidence import _resample_means, _resample_means_reference
+    gen = _random.Random(1234)
+    for trial in range(200):
+        reviewed = [f"prj_{i:02d}" for i in range(gen.randint(1, 12))]
+        zs = {p: [gen.uniform(-3, 3) for _ in range(gen.randint(1, 9))] for p in reviewed}
+        a, b = _random.Random(trial), _random.Random(trial)
+        for _ in range(5):
+            assert _resample_means(a, reviewed, zs) == _resample_means_reference(b, reviewed, zs)
+        assert a.random() == b.random()            # and both consumed exactly the same stream

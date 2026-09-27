@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 
 from . import logs
@@ -235,6 +236,12 @@ def results(conn, event_id: str) -> tuple[list[scoring.ProjectResult], dict[str,
     return res, meta
 
 
+# Pure results keyed by their exact inputs (all frozen dataclasses): the dashboard and the CSVs
+# are reloaded far more often than scores change, and the Monte Carlo run dominates each load.
+_ANALYSIS_CACHE: dict[str, tuple] = {}
+_ANALYSIS_LOCK = threading.Lock()
+
+
 def analysis(conn, event_id: str, k: int) -> dict:
     """Ranking plus prize-line confidence (same reviews as the ranking) and judge agreement.
 
@@ -245,12 +252,21 @@ def analysis(conn, event_id: str, k: int) -> dict:
     if not weights:
         return {"results": [], "meta": meta, "confidence": None, "agreement": [], "favoritism": [],
                 "excluded": excluded}
-    counted = [r for r in reviews if r.judge not in excluded]
-    res = scoring.score(weights, counted, canonical)
-    scored, _ = scoring.score_reviews(weights, counted, canonical)
-    conf = confidence.prize_confidence(scored, res, k)
-    all_scored, informative = scoring.score_reviews(weights, reviews, canonical)
-    agreement_rows, flags = agreement.judge_agreement(all_scored, informative)
+    key = repr((event_id, sorted(weights.items()), reviews, canonical, sorted(excluded), k))
+    cached = _ANALYSIS_CACHE.get(key)
+    if cached is None:
+        counted = [r for r in reviews if r.judge not in excluded]
+        res = scoring.score(weights, counted, canonical)
+        scored, _ = scoring.score_reviews(weights, counted, canonical)
+        conf = confidence.prize_confidence(scored, res, k)
+        all_scored, informative = scoring.score_reviews(weights, reviews, canonical)
+        agreement_rows, flags = agreement.judge_agreement(all_scored, informative)
+        cached = (res, conf, agreement_rows, flags)
+        with _ANALYSIS_LOCK:
+            _ANALYSIS_CACHE[key] = cached
+            while len(_ANALYSIS_CACHE) > 32:
+                _ANALYSIS_CACHE.pop(next(iter(_ANALYSIS_CACHE)))
+    res, conf, agreement_rows, flags = cached
     logs.stage("analysis", "output", event_id=event_id, k=k, method=conf.method,
                close_calls=[p for p, c in conf.projects.items() if c.close_call],
                outliers=[a.judge for a in agreement_rows if a.status == "outlier"], favoritism=len(flags))

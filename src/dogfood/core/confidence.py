@@ -37,6 +37,35 @@ def _check_k(k) -> int:
     return k
 
 
+def _resample_means_reference(rng: random.Random, reviewed: list[str], zs: Mapping[str, list[float]]) -> dict:
+    """The definition: per project in id order, n draws with replacement from its n values."""
+    return {p: sum(rng.choice(zs[p]) for _ in zs[p]) / len(zs[p]) for p in reviewed}
+
+
+def _resample_means(rng: random.Random, reviewed: list[str], zs: Mapping[str, list[float]]) -> dict:
+    """Same draws and same floats as _resample_means_reference, about 3x faster.
+
+    random.Random.choice(v) is v[_randbelow(len(v))], and _randbelow(n) is getrandbits(n.bit_length())
+    repeated until < n. Inlining that consumes the identical random stream; sum() over a list keeps
+    the float arithmetic identical too. A golden test pins the equivalence, so a Python whose
+    Random works differently fails loudly instead of changing published confidence silently.
+    """
+    getrandbits = rng.getrandbits
+    means = {}
+    for p in reviewed:
+        values = zs[p]
+        n = len(values)
+        bits = n.bit_length()
+        picks = []
+        for _ in range(n):
+            r = getrandbits(bits)
+            while r >= n:
+                r = getrandbits(bits)
+            picks.append(values[r])
+        means[p] = sum(picks) / n
+    return means
+
+
 def prize_confidence(scored: Iterable[ScoredReview], ranking: Iterable[ProjectResult], k: int,
                      seed: int = 0, replicates: int = 2000) -> ConfidenceReport:
     k = _check_k(k)
@@ -66,11 +95,7 @@ def prize_confidence(scored: Iterable[ScoredReview], ranking: Iterable[ProjectRe
         method, total = "monte_carlo", replicates
         rng = random.Random(seed)
         for _ in range(replicates):
-            means = {}
-            for p in reviewed:  # id order, so the random stream is reproducible
-                values = zs[p]
-                means[p] = sum(rng.choice(values) for _ in values) / len(values)
-            tally(means)
+            tally(_resample_means(rng, reviewed, zs))
 
     out = {}
     for p in published:
