@@ -6,10 +6,12 @@
 {% if team %}
   <section class="card">
     <h2>Team {{ team.name }}</h2>
-    <p>Invite link: <code>/join/{{ team.invite_code }}</code></p>
+    <div class="row">Invite link: <code>/join/{{ team.invite_code }}</code>
+      <form class="inline" method="post" action="/teams/invite"><button title="The current link stops working">New link</button></form></div>
     <h3>Projects</h3>
     <ul>{% for p in projects %}<li><a href="/projects/{{ p.id }}">{{ p.title }}</a> ({{ p.status }})</li>{% else %}<li>None yet.</li>{% endfor %}</ul>
-    {% if is_open %}<p><a href="/projects/new">Submit a project</a></p>{% endif %}
+    {% if is_open %}<p><a href="/projects/new">Submit a project</a></p>
+    <form method="post" action="/teams/leave" onsubmit="return confirm('Leave team {{ team.name }}?')"><button>Leave team</button></form>{% endif %}
   </section>
 {% elif event and is_open and not actor.judge_id(event.id) %}
   <form class="card" method="post" action="/teams">

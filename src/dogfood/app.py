@@ -501,6 +501,51 @@ async def create_team(request: Request):
     return RedirectResponse("/me", status_code=303)
 
 
+@app.post("/teams/leave")
+@app.post("/api/v1/teams/leave")
+def leave_team(request: Request):
+    """Leave your team while submissions are open. The last member of a team that has projects
+    stays: someone must be able to edit them, and the gallery must not show an orphaned entry."""
+    conn, actor, ev = conn_of(request), actor_of(request), event_for(request)
+    if not actor.authenticated:
+        return deny(request, Decision.UNAUTHENTICATED)
+    if ev is None or not submissions_open(svc.event_close(ev), request.state.now):
+        return deny(request, Decision.FORBIDDEN, "submissions_closed")
+    tid = actor.team_id(ev["id"])
+    if not tid:
+        return deny(request, Decision.NOT_FOUND, "not_in_a_team")
+    with db.transaction(conn):
+        if svc.team_size(conn, tid) == 1 and conn.execute("SELECT 1 FROM projects WHERE team_id = ?", (tid,)).fetchone():
+            conflict = "last_member_with_projects"
+        else:
+            conflict = None
+            conn.execute("DELETE FROM team_members WHERE team_id = ? AND user_id = ?", (tid, actor.user_id))
+            svc.audit(conn, actor, ev["id"], "team.leave", tid)
+    if conflict:
+        if wants_json(request):
+            return JSONResponse({"error": conflict}, status_code=409)
+        return render(request, "message.html", {"title": "Cannot leave", "message":
+                      "You are the last member of a team with projects. Invite someone first."}, status=409)
+    return Response(status_code=204) if wants_json(request) else RedirectResponse("/me", status_code=303)
+
+
+@app.post("/teams/invite")
+@app.post("/api/v1/teams/invite")
+def rotate_invite(request: Request):
+    """New invite link for your team; the old one stops working (e.g. it was posted publicly)."""
+    conn, actor, ev = conn_of(request), actor_of(request), event_for(request)
+    if not actor.authenticated:
+        return deny(request, Decision.UNAUTHENTICATED)
+    tid = actor.team_id(ev["id"]) if ev else None
+    if not tid:
+        return deny(request, Decision.NOT_FOUND, "not_in_a_team")
+    code = secrets.token_urlsafe(12)
+    with db.transaction(conn):
+        conn.execute("UPDATE teams SET invite_code = ? WHERE id = ?", (code, tid))
+        svc.audit(conn, actor, ev["id"], "team.invite_rotate", tid)
+    return JSONResponse({"invite": f"/join/{code}"}) if wants_json(request) else RedirectResponse("/me", status_code=303)
+
+
 @app.get("/join/{code}", response_class=HTMLResponse)
 def join_page(request: Request, code: str):
     team = conn_of(request).execute("SELECT * FROM teams WHERE invite_code = ?", (code,)).fetchone()
