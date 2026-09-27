@@ -1,7 +1,8 @@
 services:
   portal:
     build: .
-    image: dogfood-portal:latest
+    # Always build from this checkout, so a stale image with the same name can never be run.
+    pull_policy: build
     ports:
       - "8080:8080"
     environment:

@@ -8,10 +8,20 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PROJECT=dogfood-check
+# A system proxy must not intercept the checker's requests to localhost.
+export no_proxy="localhost,127.0.0.1,::1${no_proxy:+,$no_proxy}" NO_PROXY="localhost,127.0.0.1,::1${NO_PROXY:+,$NO_PROXY}"
 cleanup() { docker compose -p "$PROJECT" down -v --remove-orphans >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-if python3 -c "import socket,sys; s=socket.socket(); sys.exit(s.connect_ex(('127.0.0.1', 8080)) != 0)"; then
+if python3 -c "
+import socket, sys
+for fam, addr in ((socket.AF_INET, '127.0.0.1'), (socket.AF_INET6, '::1')):
+    try:
+        if socket.socket(fam).connect_ex((addr, 8080)) == 0:
+            sys.exit(0)
+    except OSError:
+        pass
+sys.exit(1)"; then
     echo "port 8080 is in use; stop the running portal first (docker compose stop)" >&2
     exit 2
 fi

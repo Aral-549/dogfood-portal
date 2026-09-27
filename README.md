@@ -42,7 +42,9 @@ It starts its own isolated copy of the portal (separate compose project and
 volume, so your data is never touched), waits until it is healthy, runs the
 official `run.py` unmodified, writes `acceptance-report.txt`, and exits
 non-zero if a claimed tier is not verified. Stop your own portal first, since
-both use port 8080. The same script runs in GitHub Actions on every push
+both use port 8080. If you use an HTTP proxy, the script already exempts
+localhost; for the plain `run.py` form, set `no_proxy=localhost,127.0.0.1`
+first. The same script runs in GitHub Actions on every push
 (`.github/workflows/acceptance.yml`).
 
 Against an already running portal, the plain form also works:
