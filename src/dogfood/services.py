@@ -10,7 +10,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 from . import logs
-from .core import agreement, confidence, scoring
+from .core import agreement, confidence, ordinal, scoring
 from .core.authz import Actor
 from .core.timeutil import format_utc, parse_utc
 
@@ -194,6 +194,19 @@ def rubric(conn, event_id: str) -> dict[str, float]:
             conn.execute("SELECT name, weight FROM criteria WHERE event_id = ? ORDER BY position, name", (event_id,))}
 
 
+def conflict_pairs(conn, event_id: str) -> set[tuple[str, str]]:
+    """(judge_id, project_id) pairs that must never be assigned or counted: the judge is on the
+    project's team, or recused themselves from it. One definition for assignment, tie-breaks,
+    scoring and the score route."""
+    pairs = {(r[0], r[1]) for r in conn.execute(
+        "SELECT j.id, p.id FROM judges j JOIN team_members m ON m.user_id = j.user_id "
+        "JOIN projects p ON p.team_id = m.team_id WHERE j.event_id = ?", (event_id,))}
+    pairs |= {(r[0], r[1]) for r in conn.execute(
+        "SELECT x.judge_id, x.project_id FROM recusals x JOIN judges j ON j.id = x.judge_id WHERE j.event_id = ?",
+        (event_id,))}
+    return pairs
+
+
 def _scoring_inputs(conn, event_id: str):
     """(weights, effective complete reviews, canonical project ids, project metadata, excluded judges)."""
     projects = conn.execute(
@@ -218,9 +231,7 @@ def _scoring_inputs(conn, event_id: str):
         logs.stage("scoring", "reviews_not_counted", event_id=event_id, **dropped)
     # Conflict of interest: a judge who is (now) on a project's team never counts for it,
     # even for a review given before joining (scoring re-checks too, see BUG-12).
-    conflicted = {(r["jid"], r["pid"]) for r in conn.execute(
-        "SELECT j.id AS jid, p.id AS pid FROM judges j JOIN team_members m ON m.user_id = j.user_id "
-        "JOIN projects p ON p.team_id = m.team_id WHERE j.event_id = ?", (event_id,))}
+    conflicted = conflict_pairs(conn, event_id)
     if conflicted:
         before = len(complete)
         complete = [r for r in complete if (r.judge, r.project) not in conflicted
@@ -259,6 +270,7 @@ def analysis(conn, event_id: str, k: int) -> dict:
     weights, reviews, canonical, meta, excluded = _scoring_inputs(conn, event_id)
     if not weights:
         return {"results": [], "meta": meta, "confidence": None, "agreement": [], "favoritism": [], "shrunk": {},
+                "ordinal": {}, "cross_check": [],
                 "excluded": excluded}
     key = repr((event_id, sorted(weights.items()), reviews, canonical, sorted(excluded), k))
     cached = _ANALYSIS_CACHE.get(key)
@@ -270,17 +282,35 @@ def analysis(conn, event_id: str, k: int) -> dict:
         all_scored, informative = scoring.score_reviews(weights, reviews, canonical)
         agreement_rows, flags = agreement.judge_agreement(all_scored, informative)
         shrunk = scoring.shrunk_ranks(weights, counted, canonical)
-        cached = (res, conf, agreement_rows, flags, shrunk)
+        ordered = ordinal.bradley_terry(scored, canonical)
+        cached = (res, conf, agreement_rows, flags, shrunk, ordered)
         with _ANALYSIS_LOCK:
             _ANALYSIS_CACHE[key] = cached
             while len(_ANALYSIS_CACHE) > 32:
                 _ANALYSIS_CACHE.pop(next(iter(_ANALYSIS_CACHE)))
-    res, conf, agreement_rows, flags, shrunk = cached
+    res, conf, agreement_rows, flags, shrunk, ordered = cached
     logs.stage("analysis", "output", event_id=event_id, k=k, method=conf.method,
                close_calls=[p for p, c in conf.projects.items() if c.close_call],
                outliers=[a.judge for a in agreement_rows if a.status == "outlier"], favoritism=len(flags))
     return {"results": res, "meta": meta, "confidence": conf, "agreement": agreement_rows,
-            "favoritism": flags, "excluded": excluded, "shrunk": shrunk}
+            "favoritism": flags, "excluded": excluded, "shrunk": shrunk, "ordinal": ordered.ranks,
+            "cross_check": cross_check(res, shrunk, ordered.ranks, conf, k)}
+
+
+def cross_check(res, shrunk: dict, ordered: dict, conf, k: int) -> list[dict]:
+    """Per project: the published rank next to two independent ways of reading the same reviews
+    (shrunk normalization; judges' orderings only). `prize_line_disputed` when they disagree about
+    whether the project is in the top k: check those before announcing winners."""
+    out = []
+    for r in res:
+        methods = {"published": r.rank, "shrunk": shrunk.get(r.project), "ordering": ordered.get(r.project)}
+        inside = {name: rank is not None and rank <= k for name, rank in methods.items()}
+        c = conf.projects.get(r.project) if conf else None
+        out.append({"project": r.project, "rank": r.rank, "shrunk_rank": methods["shrunk"],
+                    "ordering_rank": methods["ordering"], "p_top_k": None if c is None or c.unreviewed else c.p_top_k,
+                    "prize_line_disputed": r.n_reviews > 0 and len(set(inside.values())) > 1,
+                    "disagreeing": sorted(n for n, v in inside.items() if v != inside["published"])})
+    return out
 
 
 def progress(conn, event_id: str) -> list[dict]:
@@ -355,6 +385,9 @@ def export_event(conn, ev, voting_closed: bool) -> dict:
                     "summary": p["summary"], "repo_url": p["repo_url"]}
                    for p in conn.execute("SELECT * FROM projects WHERE event_id = ? AND status = 'draft' "
                                          "ORDER BY id", (eid,))],
+        "recusals": [{"judge": r[0], "project": r[1], "reason": r[2], "at": r[3]} for r in conn.execute(
+            "SELECT x.judge_id, x.project_id, x.reason, x.at FROM recusals x JOIN judges j ON j.id = x.judge_id "
+            "WHERE j.event_id = ? ORDER BY 1, 2", (eid,))],
         "organizers": [r[0] for r in conn.execute(
             "SELECT u.email FROM organizers o JOIN users u ON u.id = o.user_id WHERE o.event_id = ? "
             "ORDER BY u.email", (eid,))],
@@ -393,6 +426,13 @@ def _import_people_and_activity(conn, event_id: str, data: dict, stamp: str) -> 
     for a in _list_of(data, "assignments"):
         if isinstance(a, dict) and a.get("judge") in judges and a.get("project") in projects:
             conn.execute("INSERT OR IGNORE INTO assignments VALUES (?, ?)", (a["judge"], a["project"]))
+
+    for x in _list_of(data, "recusals"):
+        if isinstance(x, dict) and x.get("judge") in judges and x.get("project") in projects \
+                and isinstance(x.get("reason"), str) and x["reason"].strip():
+            conn.execute("INSERT OR IGNORE INTO recusals VALUES (?, ?, ?, ?)",
+                         (x["judge"], x["project"], x["reason"][:1000], str(x.get("at") or stamp)[:40]))
+            conn.execute("DELETE FROM assignments WHERE judge_id = ? AND project_id = ?", (x["judge"], x["project"]))
 
     def user(email):
         return _ensure_user(conn, email, "", stamp) if isinstance(email, str) and "@" in email else None

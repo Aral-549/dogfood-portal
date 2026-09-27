@@ -765,6 +765,32 @@ def judge_home(request: Request):
                                           "judging_open": svc.judging_open(ev, request.state.now)})
 
 
+@app.post("/judge/projects/{project_id}/recuse")
+@app.post("/api/v1/judge/recusals/{project_id}")
+async def recuse(request: Request, project_id: str):
+    """A judge declares a conflict of interest with an assigned project. The assignment goes, any
+    score they gave stops counting, and auto-assign / tie-breaks will never pair them again."""
+    conn, actor = conn_of(request), actor_of(request)
+    if not actor.authenticated:
+        return deny(request, Decision.UNAUTHENTICATED)
+    p = conn.execute("SELECT event_id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    jid = actor.judge_id(p["event_id"]) if p else None
+    if not jid or not conn.execute(
+            "SELECT 1 FROM assignments WHERE judge_id = ? AND project_id = ? UNION "
+            "SELECT 1 FROM reviews WHERE judge_id = ? AND project_id = ?", (jid, project_id, jid, project_id)).fetchone():
+        return deny(request, Decision.NOT_FOUND, "not_assigned")
+    reason = clean((await body_of(request)).get("reason"), 1000)
+    if not reason:
+        return JSONResponse({"error": "invalid", "detail": "say briefly why (e.g. 'former colleague')"},
+                            status_code=422)
+    with db.transaction(conn):
+        conn.execute("INSERT OR IGNORE INTO recusals VALUES (?, ?, ?, ?)",
+                     (jid, project_id, reason, format_utc(request.state.now)))
+        conn.execute("DELETE FROM assignments WHERE judge_id = ? AND project_id = ?", (jid, project_id))
+        svc.audit(conn, actor, p["event_id"], "judge.recuse", project_id, judge=jid, reason=reason)
+    return Response(status_code=204) if wants_json(request) else RedirectResponse("/judge", status_code=303)
+
+
 @app.post("/judge/projects/{project_id}")
 @app.post("/api/judge/scores/{project_id}")
 @app.post("/api/v1/judge/scores/{project_id}")
@@ -781,6 +807,8 @@ async def submit_score(request: Request, project_id: str):
                                            project_team_id=p["team_id"])
     if not decision.allowed:
         return deny(request, decision, reason)
+    if conn.execute("SELECT 1 FROM recusals WHERE judge_id = ? AND project_id = ?", (jid, project_id)).fetchone():
+        return deny(request, Decision.FORBIDDEN, "recused")
     data = await body_of(request)
     crit_in = data.get("criteria") if isinstance(data.get("criteria"), dict) else data
     values = {}
@@ -868,12 +896,15 @@ def organizer_home(request: Request):
         "abuse": conn.execute("SELECT f.*, u.email, (SELECT COUNT(*) FROM votes v WHERE v.user_id = f.user_id "
                               "AND v.event_id = ?) AS votes FROM abuse_flags f JOIN users u ON u.id = f.user_id "
                               "ORDER BY f.id DESC LIMIT 100", (ev["id"],)).fetchall(),
+        "recusals": conn.execute("SELECT x.judge_id, x.project_id, x.reason, x.at FROM recusals x JOIN judges j "
+                                 "ON j.id = x.judge_id WHERE j.event_id = ? ORDER BY x.at DESC", (ev["id"],)).fetchall(),
         "records_count": conn.execute("SELECT COUNT(*) FROM records WHERE event_id = ?", (ev["id"],)).fetchone()[0],
         "hooks": [dict(h) | {"events": json.loads(h["events"])} for h in conn.execute(
             "SELECT id, url, events FROM webhooks WHERE event_id = ?", (ev["id"],))],
         "voided": {r["user_id"]: r["reason"] for r in conn.execute(
             "SELECT user_id, reason FROM voided_voters WHERE event_id = ?", (ev["id"],))},
-        "agreement": a["agreement"], "favoritism": a["favoritism"], "excluded": a["excluded"], "shrunk": a["shrunk"]})
+        "agreement": a["agreement"], "favoritism": a["favoritism"], "excluded": a["excluded"], "shrunk": a["shrunk"],
+        "cross": {x["project"]: x for x in a["cross_check"]}})
 
 
 def _prize_places(raw) -> int:
@@ -942,9 +973,7 @@ async def run_tiebreak(request: Request):
     for r in conn.execute("SELECT r.judge_id, r.project_id FROM reviews r JOIN judges j ON j.id = r.judge_id "
                           "WHERE j.event_id = ?", (ev["id"],)):
         reviewed_by.setdefault(r["judge_id"], set()).add(r["project_id"])
-    conflicts = {(r["jid"], r["pid"]) for r in conn.execute(
-        "SELECT j.id AS jid, p.id AS pid FROM judges j JOIN team_members m ON m.user_id = j.user_id "
-        "JOIN projects p ON p.team_id = m.team_id WHERE j.event_id = ?", (ev["id"],))}
+    conflicts = svc.conflict_pairs(conn, ev["id"])
     done = {r["project_id"] for r in conn.execute(
         "SELECT t.project_id FROM tiebreak_assignments t JOIN projects p ON p.id = t.project_id WHERE p.event_id = ?",
         (ev["id"],))}
@@ -1147,9 +1176,7 @@ async def run_assignment(request: Request):
     existing = [(r["judge_id"], r["project_id"]) for r in conn.execute(
         "SELECT a.judge_id, a.project_id FROM assignments a JOIN judges j ON j.id = a.judge_id WHERE j.event_id = ?",
         (ev["id"],))]
-    conflicts = {(r["jid"], r["pid"]) for r in conn.execute(
-        "SELECT j.id AS jid, p.id AS pid FROM judges j JOIN team_members m ON m.user_id = j.user_id "
-        "JOIN projects p ON p.team_id = m.team_id WHERE j.event_id = ?", (ev["id"],))}
+    conflicts = svc.conflict_pairs(conn, ev["id"])
     new = auto_assign(projects, judge_tracks, existing, conflicts, k)
     conn.executemany("INSERT OR IGNORE INTO assignments VALUES (?, ?)", new)
     svc.audit(conn, actor_of(request), ev["id"], "assignment.run", ev["id"], k=k, added=len(new))
@@ -1722,6 +1749,17 @@ async def import_event(request: Request):
         return JSONResponse({"error": "invalid", "detail": "import failed and was undone"}, status_code=422)
     return JSONResponse({"event": event["id"], "counts": report.counts, "rejected": report.rejected,
                          "duplicates": report.duplicates}, status_code=201)
+
+
+@app.get("/api/v1/results/cross-check")
+def results_cross_check(request: Request):
+    """Organizer: the published ranking beside the shrunk and ordering-only rankings, with the
+    projects whose top-k membership depends on the method. Advisory; nothing here changes ranks."""
+    ev, denied = _organizer_guard(request)
+    if denied:
+        return denied
+    k = _prize_places(request.query_params.get("k"))
+    return {"k": k, "projects": svc.analysis(conn_of(request), ev["id"], k)["cross_check"]}
 
 
 @app.get("/api/v1/results")

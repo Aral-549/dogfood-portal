@@ -236,3 +236,13 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
     error       TEXT,
     PRIMARY KEY (delivery_id, attempt)
 );
+
+-- Self-declared conflicts of interest (research: Devpost lets judges recuse themselves).
+-- A recused pair is treated exactly like a team conflict: never assigned, never counted.
+CREATE TABLE IF NOT EXISTS recusals (
+    judge_id   TEXT NOT NULL REFERENCES judges(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    reason     TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+    at         TEXT NOT NULL,
+    PRIMARY KEY (judge_id, project_id)
+);

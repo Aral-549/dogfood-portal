@@ -17,6 +17,12 @@
     <input name="comment" placeholder="Comment" value="{{ a.comment or '' }}" maxlength="4000">
     <button>Save score</button>
   </form>
+  <details class="muted"><summary>Conflict of interest?</summary>
+    <form method="post" action="/judge/projects/{{ a.id }}/recuse" class="row">
+      <input name="reason" placeholder="Why, briefly (e.g. former colleague)" required maxlength="1000">
+      <button>Recuse me from this project</button>
+    </form>
+  </details>
   {% endif %}
 </section>
 {% else %}
