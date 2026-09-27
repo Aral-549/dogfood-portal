@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}DOGFOOD{% endblock %}{% if event %} - {{ event.name }}{% endif %}</title>
+<style>
+:root { --fg:#1b1b1b; --muted:#666; --bg:#fafaf7; --card:#fff; --line:#e3e1da; --accent:#b8325a; --ok:#2f7a4b; }
+@media (prefers-color-scheme: dark) { :root { --fg:#ecebe6; --muted:#a3a19a; --bg:#151514; --card:#1f1f1d; --line:#34332f; --accent:#ef7c9f; --ok:#6ec48f; } }
+* { box-sizing: border-box; }
+body { margin:0; font:15px/1.5 system-ui, sans-serif; color:var(--fg); background:var(--bg); }
+header { display:flex; gap:1rem; align-items:center; flex-wrap:wrap; padding:.75rem 1rem; border-bottom:1px solid var(--line); }
+header .brand { font-weight:800; letter-spacing:.08em; color:var(--accent); text-decoration:none; }
+header nav { display:flex; gap:.9rem; flex-wrap:wrap; flex:1; }
+header a { color:inherit; }
+main { max-width:1100px; margin:0 auto; padding:1rem; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:.8rem; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:.9rem; }
+.muted { color:var(--muted); font-size:.9em; }
+table { border-collapse:collapse; width:100%; font-size:.92em; }
+th, td { text-align:left; padding:.35rem .5rem; border-bottom:1px solid var(--line); vertical-align:top; }
+.table-wrap { overflow-x:auto; }
+input, select, textarea, button { font:inherit; padding:.4rem .5rem; border:1px solid var(--line); border-radius:6px; background:var(--card); color:inherit; }
+button { background:var(--accent); color:#fff; border:0; cursor:pointer; }
+form.inline { display:inline; }
+.row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin:.5rem 0; }
+.flag { font-size:.8em; padding:.05rem .4rem; border-radius:4px; border:1px solid var(--line); }
+.error { color:var(--accent); }
+.up { color:var(--ok); } .down { color:var(--accent); }
+section { margin:1.5rem 0; }
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="/projects">DOGFOOD</a>
+  <nav>
+    <a href="/projects">Gallery</a>
+    <a href="/results">Results</a>
+    {% if actor.authenticated %}
+      <a href="/me">My event</a>
+      {% if event and actor.judge_id(event.id) %}<a href="/judge">Judging</a>{% endif %}
+      {% if event and actor.is_organizer(event.id) %}<a href="/organizer?event={{ event.id }}">Organizer</a>{% endif %}
+    {% endif %}
+  </nav>
+  {% if actor.authenticated %}
+    <form class="inline" method="post" action="/logout"><button>Log out</button></form>
+  {% else %}
+    <a href="/login">Log in</a> <a href="/register">Register</a>
+  {% endif %}
+</header>
+<main>{% block content %}{% endblock %}</main>
+</body>
+</html>

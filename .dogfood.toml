@@ -1,0 +1,21 @@
+# .dogfood.toml - read by run.py. Tokens are printed by the portal at boot (demo mode).
+
+[portal]
+base_url = "http://localhost:8080"
+
+[tiers]
+claimed = []
+pitch = "A self-hosted hackathon portal with backend-enforced role isolation and documented per-judge z-score normalization."
+
+[auth]
+organizer   = "Authorization: Bearer demo-organizer"
+judge_a     = "Authorization: Bearer demo-judge-a"
+judge_b     = "Authorization: Bearer demo-judge-b"
+participant = "Authorization: Bearer demo-participant"
+
+[routes]
+gallery      = "/projects"
+submit       = "/api/projects"
+judge_scores = "/api/judge/scores"
+peer_scores  = "/api/judges/jdg_24/scores"
+csv_export   = "/api/export.csv"

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Gallery{% endblock %}
+{% block content %}
+<h1>{{ event.name }}</h1>
+<p class="muted">Submissions close {{ event.submissions_close }}. {{ total }} project{{ "" if total == 1 else "s" }}.</p>
+<form class="row" method="get" action="/projects">
+  <input name="q" value="{{ q }}" placeholder="Search title or summary" aria-label="Search">
+  <select name="track" aria-label="Track">
+    <option value="">All tracks</option>
+    {% for t in tracks %}<option value="{{ t.id }}" {% if t.id == track %}selected{% endif %}>{{ t.name }}</option>{% endfor %}
+  </select>
+  <button>Filter</button>
+</form>
+<div class="grid">
+{% for p in items %}
+  <article class="card">
+    <h3><a href="/projects/{{ p.id }}">{{ p.title }}</a></h3>
+    <p>{{ p.summary }}</p>
+    <p class="muted">{{ p.team }} &middot; {{ p.track or "No track" }}</p>
+  </article>
+{% else %}
+  <p>No projects match.</p>
+{% endfor %}
+</div>
+<div class="row">
+  {% if page > 1 %}<a href="?q={{ q|urlencode }}&track={{ track|urlencode }}&page={{ page - 1 }}">Previous</a>{% endif %}
+  {% if page * page_size < total %}<a href="?q={{ q|urlencode }}&track={{ track|urlencode }}&page={{ page + 1 }}">Next</a>{% endif %}
+</div>
+{% endblock %}

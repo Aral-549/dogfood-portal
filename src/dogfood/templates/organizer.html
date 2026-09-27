@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Organizer{% endblock %}
+{% block content %}
+<h1>Organizer: {{ event.name }}</h1>
+{% if links %}<p class="card">Judge set-password link (pass it on): <code>{{ links }}</code></p>{% endif %}
+
+<section class="card">
+  <h2>Event</h2>
+  <form method="post" action="/organizer/event?event={{ event.id }}" class="row">
+    <label>Submissions close (UTC) <input name="submissions_close" value="{{ event.submissions_close }}"></label>
+    <label>Judging close (UTC) <input name="judging_close" value="{{ event.judging_close or '' }}"></label>
+    <label>Prizes <input name="prizes" value="{{ event.prizes }}"></label>
+    <button>Save</button>
+  </form>
+  <form method="post" action="/organizer/publish?event={{ event.id }}" class="row">
+    {% if event.results_published %}<input type="hidden" name="unpublish" value="1"><button>Unpublish results</button>
+    {% else %}<button>Publish results</button>{% endif %}
+    <a href="/api/export.csv?event={{ event.id }}">Download results CSV</a>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Rubric weights</h2>
+  <form method="post" action="/organizer/rubric?event={{ event.id }}" class="row">
+    {% for name, w in rubric.items() %}<label>{{ name }} <input name="w_{{ name }}" value="{{ w }}" size="4"></label>{% endfor %}
+    <button>Save weights</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Judges and assignment</h2>
+  <form method="post" action="/organizer/judges?event={{ event.id }}" class="row">
+    <input name="email" type="email" placeholder="judge@example.org" required>
+    <input name="tracks" placeholder="track ids, comma separated">
+    <button>Invite judge</button>
+  </form>
+  <form method="post" action="/organizer/assign?event={{ event.id }}" class="row">
+    <label>Judges per project <input name="k" value="3" size="2"></label><button>Auto-assign</button>
+  </form>
+  <div class="table-wrap"><table>
+    <tr><th>Judge</th><th>Email</th><th>Done / assigned</th></tr>
+    {% for j in progress %}<tr><td>{{ j.id }}</td><td>{{ j.email }}</td><td>{{ j.done }} / {{ j.assigned }}{% if j.assigned and j.done < j.assigned %} <span class="flag">unfinished</span>{% endif %}</td></tr>{% endfor %}
+  </table></div>
+</section>
+
+<section class="card">
+  <h2>Ranking: raw vs normalized</h2>
+  {% if duplicates %}<p class="muted">Merged duplicates: {% for old, new in duplicates %}{{ old }} into {{ new }}{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+  <div class="table-wrap"><table>
+    <tr><th>Rank</th><th>Raw rank</th><th>Change</th><th>Project</th><th>Reviews</th><th>Raw mean</th><th>z</th><th></th></tr>
+    {% for r in results %}
+    {% set delta = r.raw_rank - r.rank %}
+    <tr><td>{{ r.rank }}</td><td>{{ r.raw_rank }}</td>
+      <td class="{{ 'up' if delta > 0 else ('down' if delta < 0 else '') }}">{{ ('+' ~ delta) if delta > 0 else delta }}</td>
+      <td>{{ meta[r.project].title }} <span class="muted">{{ r.project }}</span></td><td>{{ r.n_reviews }}</td>
+      <td>{{ "%.3f"|format(r.raw_mean) if r.raw_mean is not none else "" }}</td>
+      <td>{{ "%.3f"|format(r.z) if r.z is not none else "" }}</td>
+      <td>{% if r.low_confidence %}<span class="flag">low confidence</span>{% endif %}</td></tr>
+    {% endfor %}
+  </table></div>
+</section>
+
+<section class="card">
+  <h2>Audit log (latest 50)</h2>
+  <div class="table-wrap"><table>
+    <tr><th>When</th><th>Who</th><th>Action</th><th>Subject</th><th>Detail</th></tr>
+    {% for a in audit %}<tr><td>{{ a.at }}</td><td>{{ a.actor }}</td><td>{{ a.action }}</td><td>{{ a.subject }}</td><td class="muted">{{ a.detail[:200] }}</td></tr>{% endfor %}
+  </table></div>
+</section>
+{% endblock %}

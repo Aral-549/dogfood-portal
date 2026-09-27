@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Judging{% endblock %}
+{% block content %}
+<h1>Your assigned projects</h1>
+<p class="muted">You see only your own scores. {{ "Judging is open." if judging_open else "Judging is closed." }}</p>
+{% for a in assigned %}
+<section class="card">
+  <h3>{{ a.title }} <span class="flag">{{ "scored" if a.id in mine else "to do" }}</span></h3>
+  <p>{{ a.summary }}</p>
+  {% if judging_open %}
+  <form method="post" action="/judge/projects/{{ a.id }}" class="row">
+    {% for name in rubric %}
+      <label>{{ name }} <select name="{{ name }}">{% for v in range(1, 6) %}<option {% if mine.get(a.id, {}).get(name) == v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+    {% endfor %}
+    <input name="comment" placeholder="Comment" value="{{ a.comment or '' }}" maxlength="4000">
+    <button>Save score</button>
+  </form>
+  {% endif %}
+</section>
+{% else %}
+<p>No projects assigned yet.</p>
+{% endfor %}
+{% endblock %}

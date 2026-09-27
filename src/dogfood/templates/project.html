@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ p.title }}{% endblock %}
+{% block content %}
+<h1>{{ p.title }}</h1>
+<p>{{ p.summary }}</p>
+<p class="muted">{{ p.team }} &middot; {{ p.track or "No track" }} &middot; {{ p.status }}{% if p.submitted_at %} &middot; submitted {{ p.submitted_at }}{% endif %}</p>
+{% if p.repo_url %}<p><a href="{{ p.repo_url }}" rel="nofollow noopener">Repository</a></p>{% endif %}
+{% if can_edit %}<p><a href="/projects/{{ p.id }}/edit">Edit</a></p>{% endif %}
+{% endblock %}

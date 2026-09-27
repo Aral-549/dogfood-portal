@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Join {{ team.name }}{% endblock %}
+{% block content %}
+<h1>Join {{ team.name }}</h1>
+{% if actor.authenticated %}
+<form method="post" action="/join/{{ code }}"><button>Join this team</button></form>
+{% else %}
+<p><a href="/login?next=/join/{{ code }}">Log in</a> or <a href="/register">register</a> first, then open this link again.</p>
+{% endif %}
+{% endblock %}

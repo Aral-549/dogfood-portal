@@ -1,0 +1,16 @@
+services:
+  portal:
+    build: .
+    image: dogfood-portal:latest
+    ports:
+      - "8080:8080"
+    environment:
+      # Demo mode: fixed auth tokens for the acceptance checker and demo logins.
+      # Set to 0 (or remove) for a real event.
+      DOGFOOD_DEMO_SESSIONS: "1"
+    volumes:
+      - dogfood-data:/data
+    restart: unless-stopped
+
+volumes:
+  dogfood-data:
