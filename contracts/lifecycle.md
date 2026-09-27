@@ -37,6 +37,7 @@ HTML pages / JSON, plus one `audit_log` row for every state-changing organizer o
 | 19 | public `/results` before publish | 404-style "not published" page, no scores | |
 | 20 | organizer publishes results | `/results` shows the ranking (no per-judge scores) | audit row |
 | 21 | any state-changing form POST with a cross-site `Origin` | 403 | CSRF defence for cookie sessions |
+| 22 | organizer opens the default event's page | a warning that the acceptance checker uses this event and moving its deadline into the future fails T1 | added 2026-09-27: following the old README demo tip made run.py report "verified nothing" |
 
 ## Edge cases that must be covered
 - Emails compared case-insensitively.

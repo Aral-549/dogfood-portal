@@ -627,6 +627,7 @@ def organizer_home(request: Request):
         "results": res, "meta": meta, "progress": svc.progress(conn, ev["id"]), "duplicates": duplicates,
         "rubric": svc.rubric(conn, ev["id"]), "audit": audit_rows, "judges": judges, "tracks": tracks,
         "links": request.query_params.get("link"), "k": k, "confidence": a["confidence"],
+        "is_checker_event": ev["id"] == svc.default_event_id(conn),
         "agreement": a["agreement"], "favoritism": a["favoritism"], "excluded": a["excluded"]})
 
 

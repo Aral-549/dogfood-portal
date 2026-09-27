@@ -6,6 +6,12 @@
 
 <section class="card">
   <h2>Event</h2>
+  {% if is_checker_event %}
+  <p class="error">This is the default event, which the acceptance checker uses. Its submission deadline is
+    in the past on purpose: moving it into the future makes the checker's "closed event refuses
+    submissions" check fail, and with it T1. If you move it for a demo, run <code>docker compose down -v</code>
+    afterwards to restore the fixture data.</p>
+  {% endif %}
   <form method="post" action="/organizer/event?event={{ event.id }}" class="row">
     <label>Submissions close (UTC) <input name="submissions_close" value="{{ event.submissions_close }}"></label>
     <label>Judging close (UTC) <input name="judging_close" value="{{ event.judging_close or '' }}"></label>

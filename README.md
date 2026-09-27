@@ -32,12 +32,27 @@ The demo tokens are then deleted at boot.
 
 ## Acceptance check
 
+One command, from a clean, freshly seeded portal:
+
+```
+./scripts/check.sh
+```
+
+It starts its own isolated copy of the portal (separate compose project and
+volume, so your data is never touched), waits until it is healthy, runs the
+official `run.py` unmodified, writes `acceptance-report.txt`, and exits
+non-zero if a claimed tier is not verified. Stop your own portal first, since
+both use port 8080. The same script runs in GitHub Actions on every push
+(`.github/workflows/acceptance.yml`).
+
+Against an already running portal, the plain form also works:
+
 ```
 python3 run.py .dogfood.toml > acceptance-report.txt
 ```
 
-The committed `acceptance-report.txt` is the unedited output against
-`docker compose up`.
+The committed `acceptance-report.txt` is the unedited output of
+`./scripts/check.sh`.
 
 ## One event, end to end
 
@@ -54,10 +69,12 @@ The committed `acceptance-report.txt` is the unedited output against
 5. **Public**: `/projects` gallery with search and track filter; `/results`
    after publishing.
 
-The fixture event closed on 2026-03-01, so its submissions are frozen (the
-checker depends on that). To demo the submission flow, move its
-`submissions_close` into the future from the organizer page, or create a new
-event.
+The fixture event closed on 2026-03-01, so its submissions are frozen, and
+the checker depends on that: moving its deadline into the future makes the
+"closed event refuses submissions" check fail, and T1 with it. To demo the
+submission flow anyway, move the deadline on the organizer page, then run
+`docker compose down -v` afterwards to restore the fixture data.
+`./scripts/check.sh` is unaffected either way because it uses its own volume.
 
 ## Docs
 
