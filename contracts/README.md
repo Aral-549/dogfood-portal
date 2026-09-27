@@ -68,6 +68,13 @@ Python. Alternative if preferred: Node/TypeScript + Postgres.
   real login + sessions are required for T1.
 - Normalization Proof bonus: show raw, normalized, and the ranking change.
 
+## Beyond the problem statement (drafted 2026-09-27, awaiting review)
+
+- `confidence.md`: prize-line confidence (bootstrap P(top k)), close-call flags,
+  tie-breaker judge assignment.
+- `judge-agreement.md`: leave-one-out judge agreement, outlier and favoritism
+  flags, audited organizer exclusion disclosed on public results.
+
 ## Not yet contracted (next batch, after this one is reviewed)
 
 Event creation/edit UI, team invite links, judge invitation + assignment
