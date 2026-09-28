@@ -340,6 +340,11 @@ def team_size(conn, team_id: str) -> int:
 
 # --- T4: tokens, bulk export/import ---------------------------------------------------------------
 
+def token_hash(token: str) -> str:
+    """The stored form of a session or API token (SHA-256); the token itself is never stored."""
+    return _token_hash(token)
+
+
 def token_id(token: str) -> str:
     """Public id of an API token: a prefix of its hash, never the token."""
     return _token_hash(token)[:16]

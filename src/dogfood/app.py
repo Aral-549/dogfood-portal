@@ -355,7 +355,10 @@ def login_page(request: Request, next: str = "/me"):
 
 
 @app.post("/login")
+@app.post("/api/v1/login")
 async def login(request: Request):
+    """Form login sets a cookie; /api/v1/login returns a 14-day bearer session token instead.
+    Same throttling either way (THREAT-MODEL.md)."""
     data = await body_of(request)
     email, password = clean(data.get("email"), 254).lower(), password_of(data)
     nxt = data.get("next") or "/me"
@@ -373,13 +376,32 @@ async def login(request: Request):
         for window, key in counters:
             window.hit(key, _mono())
         logs.stage("auth", "login_failed", request_id=request.state.request_id)
+        if wants_json(request):
+            return JSONResponse({"error": "invalid_credentials"}, status_code=401)
         return render(request, "login.html", {"error": "Wrong email or password.", "next": nxt}, status=401)
     limits["login_fail"].reset(f"{email}|{ip}")  # the owner is back; their own typos are forgiven
     token = svc.create_session(conn, row["id"])
+    if wants_json(request):
+        return {"token": token, "token_type": "bearer", "expires_in": 14 * 86400, "user": row["id"]}
     resp = RedirectResponse(nxt, status_code=303)
     resp.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=14 * 86400,
                     secure=request.url.scheme == "https")
     return resp
+
+
+@app.post("/api/v1/logout")
+def api_logout(request: Request):
+    """Revokes the bearer session this request presents, if it is a login session. Long-lived API
+    tokens are revoked with DELETE /api/v1/tokens/{id} instead, never by accident here."""
+    if not actor_of(request).authenticated:
+        return deny(request, Decision.UNAUTHENTICATED)
+    token = request.state.token
+    row = conn_of(request).execute("SELECT label FROM sessions WHERE token_hash = ?",
+                                   (svc.token_hash(token),)).fetchone()
+    if row is None or row["label"].startswith("api:"):
+        return JSONResponse({"error": "not_a_login_session"}, status_code=409)
+    svc.delete_session(conn_of(request), token)
+    return Response(status_code=204)
 
 
 @app.post("/logout")
@@ -398,10 +420,14 @@ def register_page(request: Request):
 
 
 @app.post("/register")
+@app.post("/api/v1/register")
 async def register(request: Request):
     data = await body_of(request)
     email, name, password = clean(data.get("email"), 254).lower(), clean(data.get("name"), 100), password_of(data)
     if "@" not in email or len(password) < 8:
+        if wants_json(request):
+            return JSONResponse({"error": "invalid", "detail": "valid email and a password of 8+ characters"},
+                                status_code=422)
         return render(request, "register.html", {"error": "Valid email and a password of 8+ characters required."},
                       status=422)
     conn = conn_of(request)
@@ -411,9 +437,14 @@ async def register(request: Request):
                      (uid, email, name, await run_in_threadpool(svc.hash_password, password),
                       format_utc(request.state.now)))
     except sqlite3.IntegrityError:
+        if wants_json(request):
+            return JSONResponse({"error": "email_taken"}, status_code=409)
         return render(request, "register.html", {"error": "That email already has an account."}, status=409)
     _registration_flags(request, conn, uid, email)
     token = svc.create_session(conn, uid)
+    if wants_json(request):
+        return JSONResponse({"user": uid, "token": token, "token_type": "bearer", "expires_in": 14 * 86400},
+                            status_code=201)
     resp = RedirectResponse("/me", status_code=303)
     resp.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=14 * 86400,
                     secure=request.url.scheme == "https")
@@ -472,15 +503,18 @@ def set_password_page(request: Request, token: str):
 
 
 @app.post("/set-password/{token}")
+@app.post("/api/v1/set-password/{token}")
 async def set_password(request: Request, token: str):
     password = password_of(await body_of(request))
     if len(password) < 8:
+        if wants_json(request):
+            return JSONResponse({"error": "invalid", "detail": "8+ characters"}, status_code=422)
         return render(request, "set_password.html", {"token": token, "error": "8+ characters."}, status=422)
     uid = await run_in_threadpool(svc.consume_password_link, conn_of(request), token, password)
     if uid is None:
-        return render(request, "message.html", {"title": "Link expired", "message": "This link is not valid."},
-                      status=404)
-    return RedirectResponse("/login", status_code=303)
+        return deny(request, Decision.NOT_FOUND, "link_invalid") if wants_json(request) else render(
+            request, "message.html", {"title": "Link expired", "message": "This link is not valid."}, status=404)
+    return Response(status_code=204) if wants_json(request) else RedirectResponse("/login", status_code=303)
 
 
 @app.get("/me", response_class=HTMLResponse)

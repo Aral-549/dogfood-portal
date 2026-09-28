@@ -24,6 +24,18 @@ REDIRECT = {"303": "Done; redirects to the matching page"}
 
 # (method, path) -> (request body schema or None, {status: description or (description, schema)})
 OPS = {
+    ("post", "/api/v1/register"): (obj(["email", "password"], email=S, name=S, password={**S, "minLength": 8}),
+                                   {"201": ("Account created; a 14-day bearer session",
+                                            obj(user=S, token=S, token_type=S, expires_in=I)),
+                                    "409": "email_taken", "422": ("invalid", ERROR)}),
+    ("post", "/api/v1/login"): (obj(["email", "password"], email=S, password=S),
+                                {"200": ("A 14-day bearer session", obj(token=S, token_type=S, expires_in=I, user=S)),
+                                 "401": "invalid_credentials", "429": "too many failed logins (Retry-After)"}),
+    ("post", "/api/v1/logout"): (None, {"204": "The presented login session is revoked",
+                                        "409": "not_a_login_session (API tokens: DELETE /api/v1/tokens/{id})"}),
+    ("post", "/api/v1/set-password/{token}"): (obj(["password"], password={**S, "minLength": 8}),
+                                               {"204": "Password set; log in", "404": "link_invalid",
+                                                "422": ("invalid", ERROR)}),
     ("post", "/api/v1/projects"): (PROJECT_BODY, {"201": ("Created", obj(id=S, title=S, status=S)),
                                                   "403": "submissions_closed / not in a team"}),
     ("put", "/api/v1/projects/{project_id}"): (PROJECT_BODY, {"200": "Updated", "403": "submissions_closed / not yours"}),
@@ -95,7 +107,8 @@ EVENT_PARAM = {"name": "event", "in": "query", "required": False, "schema": S,
 NO_EVENT_PARAM = {"/api/v1/events", "/api/v1/events/{event_id}/export.json", "/api/v1/import", "/api/v1/tokens",
                   "/api/v1/tokens/{token_id}", "/api/v1/projects/{project_id}/comments", "/api/v1/comments/{comment_id}",
                   "/api/v1/records/{record_id}/revoke", "/api/v1/join/{code}", "/api/v1/judge/recusals/{project_id}",
-                  "/api/v1/projects/{project_id}/eligibility"}
+                  "/api/v1/projects/{project_id}/eligibility", "/api/v1/register", "/api/v1/login",
+                  "/api/v1/logout", "/api/v1/set-password/{token}"}
 
 
 def enrich(spec: dict) -> dict:

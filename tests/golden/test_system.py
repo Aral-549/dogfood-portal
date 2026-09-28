@@ -122,3 +122,36 @@ def test_judge_page_never_preselects_a_score(tmp_path):
         # and an untouched form is refused rather than stored as 1s
         pid = re.search(r'action="/judge/projects/([^"]+)"', todo[0]).group(1)
         assert c.post(f"/judge/projects/{pid}", data={"comment": "oops"}, headers=JUDGE_A).status_code == 422
+
+
+def test_account_lifecycle_entirely_over_the_api(tmp_path):
+    """API First: register, log in, act, log out, with no HTML form and no cookie."""
+    with portal(tmp_path) as c:
+        r = c.post("/api/v1/register", json={"email": "api.only@example.org", "password": "api-password"})
+        assert r.status_code == 201 and r.json()["token_type"] == "bearer"
+        assert "set-cookie" not in r.headers
+        assert c.post("/api/v1/register", json={"email": "api.only@example.org", "password": "api-password"}
+                      ).status_code == 409
+        assert c.post("/api/v1/register", json={"email": "x", "password": "short"}).status_code == 422
+        assert c.post("/api/v1/login", json={"email": "api.only@example.org", "password": "nope"}).status_code == 401
+        r = c.post("/api/v1/login", json={"email": "api.only@example.org", "password": "api-password"})
+        assert r.status_code == 200 and "set-cookie" not in r.headers
+        bearer = {"Authorization": f"Bearer {r.json()['token']}"}
+        assert c.get("/api/v1/tokens", headers=bearer).status_code == 200
+        api_tok = c.post("/api/v1/tokens", json={}, headers=bearer).json()["token"]
+        assert c.post("/api/v1/logout", headers={"Authorization": f"Bearer {api_tok}"}).status_code == 409
+        assert c.post("/api/v1/logout", headers=bearer).status_code == 204
+        assert c.get("/api/v1/tokens", headers=bearer).status_code == 401          # session gone
+        assert c.get("/api/v1/tokens", headers={"Authorization": f"Bearer {api_tok}"}).status_code == 200
+
+
+def test_set_password_link_over_the_api(tmp_path):
+    with portal(tmp_path) as c:
+        loc = c.post("/organizer/judges", data={"email": "api.judge@example.org"}, headers=ORGANIZER).headers["location"]
+        link = loc.split("link=", 1)[1]
+        token = link.rsplit("/", 1)[1]
+        assert c.post(f"/api/v1/set-password/{token}", json={"password": "short"}).status_code == 422
+        assert c.post(f"/api/v1/set-password/{token}", json={"password": "judge-password"}).status_code == 204
+        assert c.post(f"/api/v1/set-password/{token}", json={"password": "judge-password"}).status_code == 404
+        assert c.post("/api/v1/login", json={"email": "api.judge@example.org", "password": "judge-password"}
+                      ).status_code == 200

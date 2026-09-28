@@ -94,7 +94,10 @@ visitor looks like the proxy). `DOGFOOD_RATE_LIMITS=off` is for load tests only.
 
 **API.** Everything is under `/api/v1`, documented at `/openapi.json`. Create a
 personal token with `POST /api/v1/tokens` and send it as
-`Authorization: Bearer <token>`; it carries your own roles, nothing more.
+`Authorization: Bearer <token>`; it carries your own roles, nothing more. The whole account
+lifecycle works without a browser too: `POST /api/v1/register`, `/api/v1/login` (returns a
+14-day bearer session), `/api/v1/logout`, `/api/v1/set-password/{token}`. Every form action in
+the UI has an `/api/v1` twin.
 
 **Webhooks.** Organizer page, "Add webhook". Each delivery is signed:
 `X-Dogfood-Signature: sha256=<HMAC-SHA256(secret, raw body)>`. Failed deliveries

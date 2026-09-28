@@ -681,7 +681,7 @@ def test_widget_case12_script(tmp_path):
 # === OpenAPI (case 1: "with request/response schemas") ==========================================
 BODYLESS = {("post", "/api/v1/teams/leave"), ("post", "/api/v1/teams/invite"), ("post", "/api/v1/join/{code}"),
             ("post", "/api/v1/judges/{judge_id}/include"), ("post", "/api/v1/voters/{user_id}/unvoid"),
-            ("post", "/api/v1/records/issue")}
+            ("post", "/api/v1/records/issue"), ("post", "/api/v1/logout")}
 
 
 def test_openapi_documents_every_v1_body_and_outcome(tmp_path):
