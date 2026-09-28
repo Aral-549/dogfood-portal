@@ -2,4 +2,11 @@ _upstream/
 __pycache__/
 *.pyc
 .venv/
-data/*.db
+.pytest_cache/
+# Local runs without DOGFOOD_DATA write here: the database, the invite secret and the
+# Ed25519 signing key. None of it may ever be committed.
+data/
+*.db
+*.db-wal
+*.db-shm
+signing_key

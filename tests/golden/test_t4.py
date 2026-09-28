@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from conftest import (EVENT_ID, FIXTURES_PATH, JUDGE_A, ORGANIZER, PARTICIPANT, env, load_fixture_json,
+from conftest import (EVENT_ID, JUDGE_A, ORGANIZER, PARTICIPANT, env, load_fixture_json,
                       portal)
 
 ALL_THREES = {"functionality": 3, "quality": 3, "innovation": 3}

@@ -6,7 +6,7 @@ and scored on 11 projects including prj_06.
 
 import sqlite3
 
-from conftest import JUDGE_A, JUDGE_B, ORGANIZER, portal
+from conftest import JUDGE_A, ORGANIZER, portal
 
 ALL_THREES = {"functionality": 3, "quality": 3, "innovation": 3}
 

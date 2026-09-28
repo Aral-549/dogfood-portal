@@ -5,7 +5,6 @@ import hmac
 import json
 import os
 import secrets
-import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 
