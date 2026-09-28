@@ -121,8 +121,9 @@ def verdicts(lines: list[str]) -> dict[str, str]:
 
 def assert_all_verified(lines: list[str]) -> None:
     assert verdicts(lines) == {label: "PASS" for _, label in CHECKS}, "\n".join(lines)
-    assert [ln for ln in lines if ln.strip()][-1] == "claimed T1 T2, verified T1 T2", "\n".join(lines)
-    assert not any(ln.startswith("note:") for ln in lines), "\n".join(lines)
+    # T3/T4 are claimed and judged by hand (kickoff brief); run.py has no checks for them.
+    assert [ln for ln in lines if ln.strip()][-2:] == ["claimed T1 T2 T3 T4, verified T1 T2",
+                                                        "note: claimed but not verified: T3 T4"], "\n".join(lines)
     assert "fixtures: fixtures.json" in lines
 
 
@@ -173,8 +174,8 @@ def test_lifecycle22_moving_deadline_into_future_fails_closed_event_check(tmp_pa
     assert v["closed event refuses submissions"] == "FAIL", "\n".join(lines)
     assert [lab for lab, res in v.items() if res == "FAIL"] == ["closed event refuses submissions"]
     # T1 fails, so T2 cannot count either (run.py: a tier needs every tier below it).
-    assert "claimed T1 T2, verified nothing" in lines
-    assert "note: claimed but not verified: T1 T2" in lines
+    assert "claimed T1 T2 T3 T4, verified nothing" in lines
+    assert "note: claimed but not verified: T1 T2 T3 T4" in lines
 
 
 def test_restart_on_same_data_dir_still_verifies(tmp_path):
@@ -223,8 +224,8 @@ def test_demo_mode_off_revokes_published_tokens(tmp_path):
     for label in ("gallery is public", "project from fixtures shown", "closed event refuses submissions",
                   "judge cannot see peer scores", "participant blocked"):
         assert v[label] == "PASS", (label, "\n".join(lines))
-    assert "claimed T1 T2, verified T1" in lines
-    assert "note: claimed but not verified: T2" in lines
+    assert "claimed T1 T2 T3 T4, verified T1" in lines
+    assert "note: claimed but not verified: T2 T3 T4" in lines
 
 
 def test_two_runs_leave_gallery_and_projects_unchanged(tmp_path):

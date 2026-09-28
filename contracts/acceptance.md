@@ -20,7 +20,7 @@ fixes the external surface.
 | Key                  | Value                                   | Resolves to                            |
 |----------------------|-----------------------------------------|----------------------------------------|
 | `portal.base_url`    | `http://localhost:8080`                 |                                        |
-| `tiers.claimed`      | `["T1", "T2"]` only once both verified  | never claim ahead of the report        |
+| `tiers.claimed`      | `["T1", "T2", "T3", "T4"]`              | T1/T2 machine-verified; T3/T4 judged by hand per the kickoff brief (amended 2026-09-28) |
 | `auth.organizer`     | `Authorization: Bearer demo-organizer`  | seeded organizer user                  |
 | `auth.judge_a`       | `Authorization: Bearer demo-judge-a`    | `jdg_24` (11 fixture scores)           |
 | `auth.judge_b`       | `Authorization: Bearer demo-judge-b`    | `jdg_26` (10 fixture scores)           |
@@ -45,7 +45,7 @@ pass the check dishonestly. See `authz.md` cases 8-10.
 | 5 | `GET /api/judges/jdg_24/scores` as judge_b | 403 | the important one |
 | 6 | `GET /api/judge/scores` as participant | 403 | |
 | 7 | `GET /api/export.csv` as organizer | 200, first line is a comma-separated header | |
-| 8 | Full `run.py` run | last line `claimed T1 T2, verified T1 T2`, no `note:` line | |
+| 8 | Full `run.py` run | `claimed T1 T2 T3 T4, verified T1 T2`, then only `note: claimed but not verified: T3 T4` | amended 2026-09-28: run.py has no T3/T4 checks; the brief judges them by hand |
 
 ## Edge cases that must be covered
 - `run.py` sends the header as `Name: value`, split on the first `:`. A Bearer

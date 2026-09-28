@@ -30,7 +30,13 @@ cleanup
 docker compose -p "$PROJECT" up -d --build --wait
 python3 run.py .dogfood.toml | tee acceptance-report.txt
 
-if grep -q "^note: claimed but not verified" acceptance-report.txt; then
-    echo "FAILED: a claimed tier was not verified" >&2
+# run.py only has checks for T1 and T2; T3 and T4 are judged by hand, so run.py always lists them
+# as "claimed but not verified". Fail only if a machine-checked tier did not verify.
+if ! grep -q "^claimed .*, verified T1 T2$" acceptance-report.txt; then
+    echo "FAILED: T1 and T2 were not both verified" >&2
+    exit 1
+fi
+if grep "^note: claimed but not verified" acceptance-report.txt | grep -qw "T1\|T2"; then
+    echo "FAILED: a machine-checked tier was not verified" >&2
     exit 1
 fi

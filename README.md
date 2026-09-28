@@ -41,7 +41,9 @@ One command, from a clean, freshly seeded portal:
 It starts its own isolated copy of the portal (separate compose project and
 volume, so your data is never touched), waits until it is healthy, runs the
 official `run.py` unmodified, writes `acceptance-report.txt`, and exits
-non-zero if a claimed tier is not verified. Stop your own portal first, since
+non-zero if T1 or T2 is not verified. We claim all four tiers; `run.py` only has checks
+for T1 and T2 (T3 and T4 are judged by hand, per the brief), so the report ends with
+`note: claimed but not verified: T3 T4`. That line is expected. Stop your own portal first, since
 both use port 8080. If you use an HTTP proxy, the script already exempts
 localhost; for the plain `run.py` form, set `no_proxy=localhost,127.0.0.1`
 first. The same script runs in GitHub Actions on every push

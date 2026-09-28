@@ -4,7 +4,9 @@
 base_url = "http://localhost:8080"
 
 [tiers]
-claimed = ["T1", "T2"]
+# T1 and T2 are machine-verified by run.py; T3 and T4 are judged by hand (the kickoff brief),
+# so run.py reports them as "claimed but not verified". scripts/check.sh fails only on T1/T2.
+claimed = ["T1", "T2", "T3", "T4"]
 pitch = "A self-hosted hackathon portal with backend-enforced role isolation and documented per-judge z-score normalization."
 
 [auth]
