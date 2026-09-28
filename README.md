@@ -151,6 +151,8 @@ explains what we adopted:
 - `JUDGING.md`: assignment, scoring maths, normalization, and its limits
 - `contracts/`: the input -> expected-output specs the code was built against
 - `RESEARCH.md`: comparable platforms, what we adopted and what we rejected
+- `THREAT-MODEL.md`: sybil votes, ballot stuffing, judge collusion, deadline gaming and more:
+  what we stop, what we do not
 
 ## Honest limits
 

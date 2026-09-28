@@ -60,9 +60,13 @@ portal's constraints (one container, offline-capable, explainable judging)?
 
 ## What we chose not to build, and why
 
-- **Live pairwise judging UI (Gavel).** MadHacks' simulation shows its adaptive pair selection
-  rarely finds the best project, and it replaces the rubric the problem statement asks for. We
-  take the idea (rank from comparisons) and apply it to the data we already have.
+- **Live pairwise judging UI (Gavel), the brief's "Pairwise Mode" bonus.** The brief says
+  to pick one bonus and nail it; ours is **Normalization Proof** (raw vs normalized vs ranking
+  change on the dashboard, method defended in JUDGING.md). Our ordering-only ranking uses
+  Bradley-Terry too, but it is *not* Pairwise Mode: there is no screen showing a judge two
+  projects and asking which is better. MadHacks' simulation also suggests Gavel-style adaptive
+  pair selection rarely finds the best project, so we took the idea (rank from comparisons) and
+  applied it to the comparisons the rubric scores already contain.
 - **Quadratic voting.** Its value depends on sybil resistance we do not have (no identity
   verification, offline, no email). DoraHacks needs days of anti-sybil review. Our vote stays
   one-person-limited-votes with duplicate/IP flags and organizer voiding.
