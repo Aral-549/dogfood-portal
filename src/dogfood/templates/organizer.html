@@ -135,6 +135,20 @@
   </table></div></details>{% endif %}
 </section>
 
+<section class="card">
+  <h2>Eligibility</h2>
+  <p class="muted">Rule a project out of prizes (broken rules, pre-written code, a copy). Its reviews still count toward each judge's normalization, so no other project's score changes; the ranking closes up around it. Audited, reversible, and the public results say how many were ruled out.</p>
+  {% if ineligible %}<div class="table-wrap"><table><tr><th>Project</th><th>Reason</th><th></th></tr>
+  {% for pid, reason in ineligible.items() %}<tr><td><a href="/projects/{{ pid }}">{{ meta[pid].title if pid in meta else pid }}</a> <span class="muted">{{ pid }}</span></td><td>{{ reason }}</td>
+    <td><form class="inline" method="post" action="/organizer/projects/{{ pid }}/eligibility"><input type="hidden" name="eligible" value="1"><button>Restore</button></form></td></tr>{% endfor %}
+  </table></div>{% endif %}
+  <form class="row" method="post" action="/organizer/eligibility">
+    <select name="project" required aria-label="Project"><option value="">Project...</option>{% for r in results %}<option value="{{ r.project }}">#{{ r.rank }} {{ meta[r.project].title }}</option>{% endfor %}</select>
+    <input name="reason" placeholder="Reason (required, audited)" required maxlength="1000">
+    <button>Rule ineligible</button>
+  </form>
+</section>
+
 {% if recusals %}<section class="card">
   <h2>Recusals</h2>
   <p class="muted">Judges who declared a conflict of interest. Their assignment was removed and any score they gave no longer counts. Run auto-assign again to fill the gap.</p>

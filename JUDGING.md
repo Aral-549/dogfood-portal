@@ -110,6 +110,14 @@ drops to 6th. Its judges score high across the board, so its 4s and 5s are
 closer to those judges' own averages than they look. The organizer dashboard
 shows raw rank, normalized rank and the change side by side for every project.
 
+### Ineligible projects
+
+An organizer can rule a project out of prizes (with a reason; audited; disclosed as a count on
+the public results page). It is removed *after* normalization: its reviews still count toward
+each judge's mean and spread, because a judge's scale is measured over everything they judged,
+and eligibility is about prizes, not judges. Consequence: ruling one project out never changes
+another project's z, and the ranking simply closes up (`core/scoring.without_projects`).
+
 ### Known limits (honest)
 
 - **Small samples.** Per-judge statistics come from 1 to 11 reviews. A judge

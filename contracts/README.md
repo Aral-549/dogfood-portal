@@ -73,8 +73,8 @@ Python. Alternative if preferred: Node/TypeScript + Postgres.
 ## Added by the kickoff deck (problem statement)
 
 - Ten stages: registration, teams, submissions, eligibility, judge assignment,
-  scoring, normalization, results, export. Eligibility and results/publish need
-  contracts in the next batch.
+  scoring, normalization, results, export. Eligibility: `lifecycle.md` cases E1-E8
+  (added 2026-09-28).
 - "An authentication demo that stops at the login screen" is out of scope, so
   real login + sessions are required for T1.
 - Normalization Proof bonus: show raw, normalized, and the ranking change.

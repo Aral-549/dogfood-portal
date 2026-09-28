@@ -342,6 +342,7 @@ def public_results(request: Request):
         if r.n_reviews and meta[r.project]["track"]:
             by_track.setdefault(meta[r.project]["track"], []).append(r)
     return render(request, "results.html", {"results": res, "meta": meta, "excluded_count": excluded,
+                                            "ineligible_count": len(svc.ineligible(conn_of(request), ev["id"])),
                                             "by_track": {t: rs[:3] for t, rs in sorted(by_track.items())},
                                             "voting_closed": _vstate(ev, request.state.now) == "closed"})
 
@@ -913,7 +914,8 @@ def organizer_home(request: Request):
         "cross": {x["project"]: x for x in a["cross_check"]},
         "integrity": svc.integrity_report(conn, ev["id"], {r.project: r.rank for r in res}, k),
         "plan": judging_plan(len(res), len(judges), sum(r.n_reviews for r in res)),
-        "under_reviewed": [r for r in res if r.n_reviews < 3]})
+        "under_reviewed": [r for r in res if r.n_reviews < 3],
+        "ineligible": svc.ineligible(conn, ev["id"])})
 
 
 def _prize_places(raw) -> int:
@@ -1192,6 +1194,39 @@ async def run_assignment(request: Request):
     return RedirectResponse(f"/organizer?event={ev['id']}", status_code=303)
 
 
+@app.post("/organizer/eligibility")
+@app.post("/organizer/projects/{project_id}/eligibility")
+@app.post("/api/v1/projects/{project_id}/eligibility")
+async def set_eligibility(request: Request, project_id: str | None = None):
+    """Rule a project out of prizes (a rules breach, pre-written code, a copy) or back in.
+    Reason required, audited, reversible, and disclosed as a count on the public results page.
+    /organizer/eligibility takes the project from the form, so the dashboard needs no JavaScript."""
+    conn, actor = conn_of(request), actor_of(request)
+    if project_id is None:
+        project_id = clean((await body_of(request)).get("project"), 64)
+    p = conn.execute("SELECT event_id, ineligible_reason FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if not actor.authenticated:
+        return deny(request, Decision.UNAUTHENTICATED)
+    if p is None:
+        return deny(request, Decision.NOT_FOUND)
+    if not actor.is_organizer(p["event_id"]):
+        return deny(request, Decision.FORBIDDEN)
+    data = await body_of(request)
+    eligible = data.get("eligible") in (True, "1", "true", "on")
+    reason = clean(data.get("reason"), 1000)
+    if not eligible and not reason:
+        return JSONResponse({"error": "invalid", "detail": "a reason is required to rule a project ineligible"},
+                            status_code=422)
+    with db.transaction(conn):
+        conn.execute("UPDATE projects SET ineligible_reason = ?, ineligible_at = ? WHERE id = ?",
+                     (None if eligible else reason, None if eligible else format_utc(request.state.now), project_id))
+        svc.audit(conn, actor, p["event_id"], "project.eligible" if eligible else "project.ineligible", project_id,
+                  before=p["ineligible_reason"], reason=reason or None)
+    if wants_json(request):
+        return {"project": project_id, "eligible": eligible, "reason": None if eligible else reason}
+    return RedirectResponse(f"/organizer?event={p['event_id']}", status_code=303)
+
+
 @app.post("/organizer/publish")
 @app.post("/api/v1/results/publish")
 async def publish(request: Request):
@@ -1219,7 +1254,8 @@ def _ballot_projects(conn, event_id: str) -> dict[str, dict]:
     rows = conn.execute(
         "SELECT p.id, p.title, p.summary, p.team_id, t.name AS team, COALESCE(tr.name, '') AS track "
         "FROM projects p JOIN teams t ON t.id = p.team_id LEFT JOIN tracks tr ON tr.id = p.track_id "
-        "WHERE p.event_id = ? AND p.status = 'submitted' AND p.superseded_by IS NULL", (event_id,)).fetchall()
+        "WHERE p.event_id = ? AND p.status = 'submitted' AND p.superseded_by IS NULL "
+        "AND p.ineligible_reason IS NULL", (event_id,)).fetchall()
     return {r["id"]: dict(r) for r in rows}
 
 
@@ -1267,7 +1303,8 @@ def _vote_tally(conn, event_id: str) -> list[dict]:
     voided = {r["user_id"] for r in conn.execute("SELECT user_id FROM voided_voters WHERE event_id = ?", (event_id,))}
     # Judges do not vote (case 7). Someone who voted and was made a judge afterwards stops counting too.
     voided |= {r["user_id"] for r in conn.execute("SELECT user_id FROM judges WHERE event_id = ?", (event_id,))}
-    return tally(((v["user_id"], v["project_id"]) for v in votes), voided)
+    ruled_out = set(svc.ineligible(conn, event_id))
+    return tally(((v["user_id"], v["project_id"]) for v in votes if v["project_id"] not in ruled_out), voided)
 
 
 async def _project_from_body(request: Request, project_id: str | None) -> str:

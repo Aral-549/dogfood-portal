@@ -3,6 +3,7 @@
 {% block content %}
 <h1>Results</h1>
 {% if voting_closed %}<p>The community vote is a separate result: <a href="/vote?event={{ event.id }}">People's choice</a>.</p>{% endif %}
+{% if ineligible_count %}<p class="muted">{{ ineligible_count }} project{{ "" if ineligible_count == 1 else "s" }} {{ "was" if ineligible_count == 1 else "were" }} ruled ineligible for prizes by the organizer and {{ "is" if ineligible_count == 1 else "are" }} not ranked.</p>{% endif %}
 {% if excluded_count %}<p class="muted">Reviews from {{ excluded_count }} judge{{ "" if excluded_count == 1 else "s" }} were excluded by the organizer.</p>{% endif %}
 {% if by_track %}<h2>Top of each track</h2>
 <div class="grid">{% for track, rows in by_track.items() %}<div class="card"><h3>{{ track }}</h3><ol>

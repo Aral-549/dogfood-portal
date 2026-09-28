@@ -46,9 +46,25 @@ HTML pages / JSON, plus one `audit_log` row for every state-changing organizer o
 - `GET /projects/new` after the close shows the refusal, not the form.
 - Fixture judges (no password) can be given one via the organizer's set-password link.
 
+## Eligibility (added 2026-09-28; the brief's fourth stage)
+Automatic: a project competes iff it is submitted, canonical (not a merged duplicate) and was
+submitted before the close (enforced at submission). Manual: an organizer of the event rules a
+project in or out of prizes.
+
+| # | Input | Expected output | Notes |
+|---|-------|-----------------|-------|
+| E1 | organizer `POST /api/v1/projects/{id}/eligibility` `{eligible: false, reason}` | 200; audit `project.ineligible` with the previous state | form twin: `POST /organizer/eligibility` `{project, reason}` (no JavaScript) |
+| E2 | same without a reason | 422 | |
+| E3 | judge / participant / visitor | 403 / 403 / 401 | |
+| E4 | ranking, CSV, confidence, cross-check after E1 | project absent, ranks renumbered 1..n; every other project's z unchanged (its reviews still count toward judges' normalization) | `core/scoring.without_projects` |
+| E5 | ballot and vote tally | project absent from both | |
+| E6 | public results page | "N project(s) ruled ineligible" disclosed | never which or why |
+| E7 | `{eligible: true}` | back in, original ranks restored; audit `project.eligible` | reversible |
+| E8 | export/import | `ineligible: [{project, reason, at}]` round-trips | |
+
 ## Explicitly out of scope
 - Email delivery (links are shown to the organizer to pass on; offline rule).
-- Eligibility rules beyond "submitted, canonical, before deadline" (next batch).
+- Automatic eligibility rules beyond the above (e.g. per-track restrictions).
 - T3/T4.
 
 ## Status

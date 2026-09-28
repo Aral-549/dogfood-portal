@@ -40,6 +40,10 @@ OPS = {
     ("post", "/api/v1/judge/recusals/{project_id}"): (obj(["reason"], reason=S), {
         "204": "Recused: assignment removed, any score stops counting", "404": "not_assigned",
         "422": ("reason missing", ERROR)}),
+    ("post", "/api/v1/projects/{project_id}/eligibility"): (
+        obj(eligible={**B, "description": "true to restore"}, reason={**S, "description": "required when ruling out"}),
+        {"200": ("Updated", obj(project=S, eligible=B, reason=S)), "403": "not an organizer of this event",
+         "422": ("reason missing", ERROR)}),
     ("post", "/api/v1/assignments/tiebreak"): (obj(k={**I, "minimum": 1, "maximum": 50}), REDIRECT),
     ("post", "/api/v1/assignments/auto"): (obj(k={**I, "minimum": 1, "maximum": 10, "description": "judges per project"}),
                                            REDIRECT),
@@ -90,7 +94,8 @@ EVENT_PARAM = {"name": "event", "in": "query", "required": False, "schema": S,
                "description": "event id; default: the first event"}
 NO_EVENT_PARAM = {"/api/v1/events", "/api/v1/events/{event_id}/export.json", "/api/v1/import", "/api/v1/tokens",
                   "/api/v1/tokens/{token_id}", "/api/v1/projects/{project_id}/comments", "/api/v1/comments/{comment_id}",
-                  "/api/v1/records/{record_id}/revoke", "/api/v1/join/{code}", "/api/v1/judge/recusals/{project_id}"}
+                  "/api/v1/records/{record_id}/revoke", "/api/v1/join/{code}", "/api/v1/judge/recusals/{project_id}",
+                  "/api/v1/projects/{project_id}/eligibility"}
 
 
 def enrich(spec: dict) -> dict:

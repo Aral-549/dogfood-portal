@@ -188,3 +188,59 @@ def test_dashboard_plan_and_results_by_track(tmp_path):
         c.post("/api/v1/results/publish", json={}, headers=ORGANIZER)
         res = c.get("/results").text
         assert "Top of each track" in res and "overall #1" in res
+
+
+# --- eligibility (the brief's fourth stage: "Registration, teams, submissions, eligibility, ...") --
+from dogfood.core.scoring import ProjectResult, renumber, without_projects  # noqa: E402
+
+
+def test_without_projects_closes_up_ranks_and_raw_ranks():
+    res = [ProjectResult("a", 3, 4.0, 1.0, 1, 2, False), ProjectResult("b", 3, 4.5, 0.5, 2, 1, False),
+           ProjectResult("c", 3, 3.0, 0.1, 3, 3, False)]
+    got = without_projects(res, {"a"})
+    assert [(r.project, r.rank, r.raw_rank, r.z) for r in got] == [("b", 1, 1, 0.5), ("c", 2, 2, 0.1)]
+    assert without_projects(res, set()) is res
+    assert renumber({"a": 1, "b": 2, "c": 3}, {"b"}) == {"a": 1, "c": 2}
+
+
+def test_ruling_ineligible_removes_from_prizes_without_moving_anyone_elses_score(tmp_path):
+    with portal(tmp_path) as c:
+        before = {r["project"]: r for r in c.get("/api/v1/results", headers=ORGANIZER).json()}
+        top = min(before.values(), key=lambda r: r["rank"])["project"]
+        url = f"/api/v1/projects/{top}/eligibility"
+        assert c.post(url, json={"eligible": False}, headers=ORGANIZER).status_code == 422      # reason required
+        assert c.post(url, json={"eligible": False, "reason": "x"}, headers=JUDGE_A).status_code == 403
+        assert c.post(url, json={"eligible": False, "reason": "x"}).status_code == 401
+        r = c.post(url, json={"eligible": False, "reason": "code written before the event"}, headers=ORGANIZER)
+        assert r.status_code == 200 and r.json()["eligible"] is False
+        after = c.get("/api/v1/results", headers=ORGANIZER).json()
+        assert top not in {x["project"] for x in after} and len(after) == len(before) - 1
+        assert [x["rank"] for x in after] == list(range(1, len(after) + 1))
+        for x in after:                                   # every other project keeps its place order
+            assert before[x["project"]]["rank"] - 1 == x["rank"]
+        # CSV, confidence and cross-check follow; the audit log records it; the public page discloses it
+        csv_ids = [ln.split(",")[1] for ln in c.get("/api/export.csv", headers=ORGANIZER).text.splitlines()[1:]]
+        assert top not in csv_ids and len(csv_ids) == len(after)
+        assert top not in {x["project"] for x in c.get("/api/v1/results/cross-check", headers=ORGANIZER).json()["projects"]}
+        assert _q(tmp_path, "SELECT COUNT(*) FROM audit_log WHERE action = 'project.ineligible'")[0][0] == 1
+        c.post("/api/v1/results/publish", json={}, headers=ORGANIZER)
+        assert "1 project was ruled ineligible" in c.get("/results").text
+        # reversible
+        assert c.post(url, json={"eligible": True}, headers=ORGANIZER).json()["eligible"] is True
+        assert {x["project"]: x["rank"] for x in c.get("/api/v1/results", headers=ORGANIZER).json()} == \
+            {p: x["rank"] for p, x in before.items()}
+
+
+def test_ineligible_project_leaves_ballot_and_tally_and_survives_export(tmp_path):
+    with portal(tmp_path) as c:
+        c.post("/api/v1/event", json={"voting_open": "2026-01-01T00:00:00Z", "voting_close": "2099-01-01T00:00:00Z"},
+               headers=ORGANIZER)
+        assert c.post("/api/v1/votes", json={"project": "prj_02"}, headers={"Authorization": "Bearer demo-participant"}
+                      ).status_code == 201
+        c.post("/organizer/eligibility", data={"project": "prj_02", "reason": "plagiarised"}, headers=ORGANIZER)
+        ballot = c.get("/api/v1/ballot", headers={"Authorization": "Bearer demo-participant"}).json()
+        assert "prj_02" not in {p["id"] for p in ballot["projects"]}
+        c.post("/api/v1/event", json={"voting_close": "2026-02-01T00:00:00Z"}, headers=ORGANIZER)
+        assert c.get("/api/v1/votes/results").json() == []
+        exported = c.get("/api/v1/events/evt_01/export.json", headers=ORGANIZER).json()
+        assert [(x["project"], x["reason"]) for x in exported["ineligible"]] == [("prj_02", "plagiarised")]

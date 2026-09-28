@@ -197,3 +197,25 @@ def shrunk_ranks(criteria: Mapping[str, float], reviews: Iterable[Review], proje
     for i, p in enumerate(sorted(p for p in project_ids if not zs[p]), len(rows) + 1):
         ranks[p] = i
     return ranks
+
+
+def without_projects(results: list[ProjectResult], drop: set[str]) -> list[ProjectResult]:
+    """The ranking with `drop` removed and the rest renumbered, rank and raw rank alike.
+
+    Used for projects ruled ineligible for prizes. Their reviews still count toward each judge's
+    normalization (a judge's scale is measured over everything they judged), so removing one
+    project never changes another project's z; only the positions close up.
+    """
+    if not drop:
+        return results
+    from dataclasses import replace
+    kept = [r for r in results if r.project not in drop]
+    raw_order = {r.project: i for i, r in enumerate(sorted(kept, key=lambda r: r.raw_rank), 1)}
+    return [replace(r, rank=i, raw_rank=raw_order[r.project])
+            for i, r in enumerate(sorted(kept, key=lambda r: r.rank), 1)]
+
+
+def renumber(ranks: dict[str, int], drop: set[str]) -> dict[str, int]:
+    """Same for a {project: rank} mapping (advisory rankings)."""
+    kept = sorted((p for p in ranks if p not in drop), key=lambda p: (ranks[p], p))
+    return {p: i for i, p in enumerate(kept, 1)}

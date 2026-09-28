@@ -245,11 +245,18 @@ def _scoring_inputs(conn, event_id: str):
     return weights, complete, canonical, meta, excluded
 
 
+def ineligible(conn, event_id: str) -> dict[str, str]:
+    """{project_id: reason} for projects an organizer ruled out of prizes."""
+    return {r[0]: r[1] for r in conn.execute(
+        "SELECT id, ineligible_reason FROM projects WHERE event_id = ? AND ineligible_reason IS NOT NULL", (event_id,))}
+
+
 def results(conn, event_id: str) -> tuple[list[scoring.ProjectResult], dict[str, dict]]:
-    """The published ranking: organizer-excluded judges are left out."""
+    """The published ranking: organizer-excluded judges are left out, ineligible projects too."""
     weights, reviews, canonical, meta, excluded = _scoring_inputs(conn, event_id)
     counted = [r for r in reviews if r.judge not in excluded]
     res = scoring.score(weights, counted, canonical) if weights else []
+    res = scoring.without_projects(res, set(ineligible(conn, event_id)))
     logs.stage("scoring", "output", event_id=event_id, projects=len(canonical), reviews=len(counted),
                excluded_judges=sorted(excluded))
     return res, meta
@@ -272,17 +279,20 @@ def analysis(conn, event_id: str, k: int) -> dict:
         return {"results": [], "meta": meta, "confidence": None, "agreement": [], "favoritism": [], "shrunk": {},
                 "ordinal": {}, "cross_check": [],
                 "excluded": excluded}
-    key = repr((event_id, sorted(weights.items()), reviews, canonical, sorted(excluded), k))
+    ruled_out = set(ineligible(conn, event_id))
+    key = repr((event_id, sorted(weights.items()), reviews, canonical, sorted(excluded), sorted(ruled_out), k))
     cached = _ANALYSIS_CACHE.get(key)
     if cached is None:
         counted = [r for r in reviews if r.judge not in excluded]
-        res = scoring.score(weights, counted, canonical)
+        res = scoring.without_projects(scoring.score(weights, counted, canonical), ruled_out)
         scored, _ = scoring.score_reviews(weights, counted, canonical)
-        conf = confidence.prize_confidence(scored, res, k)
+        conf = confidence.prize_confidence(scored, res, k)  # only projects still in the ranking compete
         all_scored, informative = scoring.score_reviews(weights, reviews, canonical)
         agreement_rows, flags = agreement.judge_agreement(all_scored, informative)
-        shrunk = scoring.shrunk_ranks(weights, counted, canonical)
+        shrunk = scoring.renumber(scoring.shrunk_ranks(weights, counted, canonical), ruled_out)
         ordered = ordinal.bradley_terry(scored, canonical)
+        ordered = ordinal.OrdinalResult(ordered.strengths, scoring.renumber(ordered.ranks, ruled_out),
+                                        ordered.comparisons)
         cached = (res, conf, agreement_rows, flags, shrunk, ordered)
         with _ANALYSIS_LOCK:
             _ANALYSIS_CACHE[key] = cached
@@ -385,6 +395,9 @@ def export_event(conn, ev, voting_closed: bool) -> dict:
                     "summary": p["summary"], "repo_url": p["repo_url"]}
                    for p in conn.execute("SELECT * FROM projects WHERE event_id = ? AND status = 'draft' "
                                          "ORDER BY id", (eid,))],
+        "ineligible": [{"project": r[0], "reason": r[1], "at": r[2]} for r in conn.execute(
+            "SELECT id, ineligible_reason, ineligible_at FROM projects WHERE event_id = ? "
+            "AND ineligible_reason IS NOT NULL ORDER BY id", (eid,))],
         "recusals": [{"judge": r[0], "project": r[1], "reason": r[2], "at": r[3]} for r in conn.execute(
             "SELECT x.judge_id, x.project_id, x.reason, x.at FROM recusals x JOIN judges j ON j.id = x.judge_id "
             "WHERE j.event_id = ? ORDER BY 1, 2", (eid,))],
@@ -427,6 +440,11 @@ def _import_people_and_activity(conn, event_id: str, data: dict, stamp: str) -> 
         if isinstance(a, dict) and a.get("judge") in judges and a.get("project") in projects:
             conn.execute("INSERT OR IGNORE INTO assignments VALUES (?, ?)", (a["judge"], a["project"]))
 
+    for x in _list_of(data, "ineligible"):
+        if isinstance(x, dict) and x.get("project") in projects and isinstance(x.get("reason"), str) \
+                and x["reason"].strip():
+            conn.execute("UPDATE projects SET ineligible_reason = ?, ineligible_at = ? WHERE id = ?",
+                         (x["reason"].strip()[:1000], str(x.get("at") or stamp)[:40], x["project"]))
     for x in _list_of(data, "recusals"):
         if isinstance(x, dict) and x.get("judge") in judges and x.get("project") in projects \
                 and isinstance(x.get("reason"), str) and x["reason"].strip():

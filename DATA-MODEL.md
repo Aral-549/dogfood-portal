@@ -50,7 +50,9 @@ Public participation (T3) and integrations (T4):
 
 Columns added after the first release (`db.ADDED_COLUMNS`, applied at boot by
 `db.migrate`): `events.voting_open/voting_close/votes_per_voter/voting_closed_sent`,
-`users.email_norm`, `records.revoked_at/revoked_reason`, `sessions.last_used_at`.
+`users.email_norm`, `records.revoked_at/revoked_reason`, `sessions.last_used_at`,
+`projects.ineligible_reason/ineligible_at` (organizer ruling; NULL = eligible). Also a
+`recusals` table: `(judge_id, project_id)` a judge declared a conflict with.
 Tables that gain columns this way are always written with named-column INSERTs.
 
 ### Why this shape
