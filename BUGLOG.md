@@ -271,5 +271,5 @@ files named in each entry).
 - **Symptom:** after a voting window ended and a (possibly empty) tally was shown, saving the organizer Event form to change anything (deadlines, prizes) returned 409 `voting_closed_final`, because the form always re-sends the prefilled voting dates. Found by hand while preparing the demo.
 - **Root cause:** the lock checked whether the voting fields were present in the request, not whether they changed.
 - **Stage/module:** organizer event update (`app.update_event`)
-- **Regression case added:** pending (separate verification agent)
-- **Status:** fixed, regression case pending
+- **Regression case added:** `tests/golden/test_bug37.py` (5 cases, separate verification agent)
+- **Status:** fixed (regression case passes)
