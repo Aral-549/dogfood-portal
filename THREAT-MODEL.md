@@ -2,7 +2,7 @@
 
 What someone might try against a hackathon run on this portal, what stops them, and what does
 not. The kickoff brief names four attacks (sybil votes, ballot stuffing, judge collusion,
-deadline gaming); they come first. Every "stopped" line points at the code and the golden test
+deadline gaming); they come first. Every "stopped" line points at the code and the test
 that holds it; every "not stopped" line is a real gap, not a disclaimer.
 
 Who we assume: **participants** want to win, **voters** may be a team's friends or throwaway

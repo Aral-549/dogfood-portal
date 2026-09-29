@@ -1,4 +1,4 @@
-"""Structured JSON logs, one line per stage boundary (AGENTS.md rule 5)."""
+"""Structured JSON logs, one line per stage boundary."""
 
 import json
 import logging

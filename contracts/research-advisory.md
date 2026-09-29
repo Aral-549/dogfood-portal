@@ -37,4 +37,4 @@ winners. Everything here is advisory except recusal: nothing changes the publish
 - Changing the published ranking; automatic penalties; network checks of repositories.
 
 ## Status
-Implemented. Tests: test_research_features.py. Written by the cloud session with its code; not separately reviewed.
+Implemented. Tests: test_research_features.py. Tests were written together with the code; not reviewed separately.

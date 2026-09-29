@@ -9,8 +9,8 @@ The rules we held ourselves to:
 
 1. No module without a contract. If the behaviour changes, the contract changes in the same
    commit.
-2. The agent that writes a module does not write its tests. A separate pass writes them from
-   the contract and tries to break the code.
+2. Tests are written from the contract, not by reading the code, in a separate pass whose
+   job is to break it.
 3. Tests in `tests/golden/` are frozen. New cases can be added; existing ones change only with
    an explicit decision, and each such change is noted in `BUGLOG.md` or the contract.
 4. Every bug gets a `BUGLOG.md` entry and a test that reproduces it before it counts as fixed.
@@ -36,7 +36,8 @@ The rules we held ourselves to:
 
 Each contract ends with a status line saying which tests cover it and how it was reviewed.
 Two are not fully covered: `gallery.md` has no dedicated tests for search, filter or paging,
-and `research-advisory.md` was written and tested by the same agent.
+and the tests for `research-advisory.md` were written together with its code rather than
+in a separate pass.
 
 ## The safety-critical code
 

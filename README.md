@@ -16,9 +16,9 @@ claimed T1 T2 T3 T4, verified T1 T2
 note: claimed but not verified: T3 T4
 ```
 
-All seven checks pass. `run.py` only has checks for T1 and T2; T3 and T4 are judged by hand
-under the brief, so that note appears for every team that claims them. What we did not build,
-or built only partly, is listed under [Honest limits](#honest-limits).
+All seven checks pass. `run.py` only has checks for T1 and T2, and the brief says T3 and T4
+are judged by hand, so that note shows up for anyone who claims them. What we did not build,
+or built only partly, is under [Honest limits](#honest-limits).
 
 ## Run it
 
@@ -37,16 +37,18 @@ Then open http://localhost:8080. On first boot the portal loads `fixtures.json` 
 | Participant | priya1@example.org (team tm_01)    | dogfood-demo | `Authorization: Bearer demo-participant`  |
 
 Data lives in the `dogfood-data` volume, and `docker compose down -v` resets it. Once the image
-is built, nothing needs the network: no cloud accounts, no hosted database, no external APIs.
+is built, nothing needs the network: there are no cloud accounts, hosted databases or external
+APIs.
 
 For a real event, set `DOGFOOD_DEMO_SESSIONS: "0"` in `docker-compose.yml`. The demo tokens and
 passwords are then removed at boot.
 
 ## One event, start to finish
 
-1. The organizer sets dates, prizes and rubric weights on `/organizer`, invites judges (the
-   portal shows a set-password link to pass on, since there is no email) and runs auto-assign.
-2. Participants register, create a team, share its invite link, and submit a project. Drafts
+1. The organizer sets dates, prizes and rubric weights on `/organizer`, invites judges and runs
+   auto-assign. There is no email, so the portal shows each judge's set-password link for the
+   organizer to pass on.
+2. Participants register, create a team, share its invite link and submit a project. Drafts
    are allowed and edits work until the deadline, after which the backend refuses both.
 3. Judges score each assigned project from 1 to 5 per criterion on `/judge`. A judge only ever
    sees their own scores; asking the API for another judge's scores gets a 403.
@@ -54,39 +56,23 @@ passwords are then removed at boot.
    calls and flagged judges, then publishes results and downloads the CSV.
 5. Anyone can browse `/projects`, and `/results` once published.
 
-The fixture event closed on 2026-03-01 and the checker relies on that: its "closed event
-refuses submissions" check fails if you move that deadline into the future. If you move it for
-a demo, run `docker compose down -v` afterwards. `./scripts/check.sh` is unaffected because it
-uses its own volume.
-
 ## What is in each tier
 
-**T1, core.** Accounts and sessions, roles (visitor, participant, judge, organizer, admin),
-events with tracks and prizes, teams by invite link (up to four people), drafts, a deadline the
-backend enforces, and a gallery with search and a track filter.
+**T1, core.** Accounts and sessions, five roles (visitor, participant, judge, organizer,
+admin), events with tracks and prizes, teams of up to four by invite link, drafts, a deadline
+the backend enforces, and a gallery with search and a track filter.
 
-**T2, judging.** Judge invitations and automatic assignment that never pairs a judge with their
+**T2, judging.** Judge invitations, automatic assignment that never pairs a judge with their
 own team, a rubric with weights the organizer sets, role isolation checked in the backend
-before any data is read, a live progress view, CSV export, and cross-judge normalization. The
-normalization is a per-judge z-score; `JUDGING.md` explains it, shows what it does to the
-fixture ranking (it moves 39 of 40 projects) and lists its weaknesses.
-
-Two things we added because the plain ranking hid real problems:
-
-- Prize-line confidence. Each project's reviews are resampled to estimate how often it would
-  still be in the top k. On the fixtures, third place is a coin flip, and one button assigns a
-  tie-breaker judge to each close call.
-- Judge agreement. Each judge's scores are compared with the other judges on the same
-  projects. On the fixtures one judge (jdg_04) scores almost exactly against everyone else. The
-  organizer can exclude a judge with a written reason; it is audited and the public results say
-  how many judges were excluded.
+before any data is read, a live progress view, CSV export, and cross-judge normalization
+(explained in `JUDGING.md`). On top of that, the dashboard shows how sure the ranking is at the
+prize line and which judges disagree with everyone else, both covered below.
 
 **T3, public.** A community vote for logged-in users in its own time window, with a ballot
-order that is random per voter. Tallies are hidden from everyone, organizers included, until
-voting closes, and once any tally has been shown the window can no longer move. There are
-comments on project pages, rate limits on votes, comments and failed logins, flags for
-duplicate accounts and for many accounts from one IP, and an audit trail. The organizer can
-void a flagged account's votes.
+order that is shuffled per voter. Tallies are hidden from everyone, organizers included, until
+voting closes. There are comments on project pages, rate limits on votes, comments and failed
+logins, flags for duplicate accounts and for many accounts from one IP, and an audit trail. The
+organizer can void a flagged account's votes.
 
 **T4, stretch.** Everything is under `/api/v1` with an OpenAPI description at `/openapi.json`,
 including register and login, and personal API tokens can be revoked. Webhooks are signed with
@@ -95,9 +81,65 @@ organizer adds one. Certificates and judge participation records are signed with
 can be checked offline (see below). There is an embeddable gallery widget, and whole events
 can be exported and imported without loss.
 
-`RESEARCH.md` covers a few further ideas taken from other platforms: judge recusal, a second
-ranking built only from each judge's ordering of their projects, integrity checks to run before
+`RESEARCH.md` covers a few ideas taken from other platforms: judge recusal, a second ranking
+built only from each judge's ordering of their projects, integrity checks to run before
 announcing winners, and a judging-capacity plan.
+
+## Problems we ran into
+
+These shaped the portal more than the feature list did. Each bug mentioned has an entry in
+`BUGLOG.md` and a test that reproduces it.
+
+**Judges don't score alike.** In the fixture data some judges give mostly 2s and 3s and others
+mostly 4s and 5s, so a plain average mostly measures which judges a project happened to draw.
+We normalize each judge against their own scores (a per-judge z-score). That moves 39 of the 40
+projects, and the project with the best raw average drops to sixth because its judges scored
+everything high. The fix has its own weak spot: a judge with only two reviews always produces
+exactly -1 and +1, so a 4-versus-5 judge counts as much as a 1-versus-5 judge. We show a shrunk
+ranking beside the published one as a warning rather than hide it. One judge gave 4, 4, 4 to
+every project; that carries no ranking information, so it contributes nothing.
+
+**A ranked list looks more certain than it is.** Resampling each project's reviews shows that
+third place is a coin flip: the projects ranked third and fourth are about equally likely to
+deserve it. The dashboard flags close calls, and one button sends an extra judge to each.
+
+**Spotting an unreliable judge without crying wolf.** Our first rule flagged any judge whose
+scores ran against the others, which flagged 7 of 30 judges, one of them at -0.005. That is
+noise. The rule now needs clearly opposite scores over at least four shared projects, and flags
+exactly one judge. The cost is that 14 judges share too few projects to be judged at all.
+
+**The fixture data has a duplicate.** Team tm_07 submitted "Dry Harbour" twice. We keep both
+rows, treat the later one as the real project, and merge the reviews when scoring: a judge who
+reviewed both counts once. Doing it at scoring time means the merge can be audited and undone.
+
+**Keeping a vote secret is harder than hiding a number.** The tally page was locked down, but
+for a while the organizer's audit log listed every vote with the voter and the project while
+voting was still open (BUG-31). An organizer could also close voting early, read the tallies and
+reopen it (BUG-33). Vote entries in the log are now masked until voting closes, and once any
+tally has been shown the voting window can no longer move. That lock then got in the way of an
+ordinary edit, because the event form always re-sends the voting dates (BUG-37), so only a real
+change of dates is blocked now.
+
+**The invite form was a way into other people's accounts.** Inviting an existing user as a
+judge issued a set-password link, which let an organizer reset a judge's password and score as
+them (BUG-8). Later we found the same route could claim a participant's account (BUG-23).
+Set-password links are now only issued for accounts with no password that belong to no team,
+and they are checked again when used.
+
+**Concurrency.** Twenty wrong-password logins sent at once all got through a limit of five,
+because the limit was checked before the password hash and counted after it (BUG-32). Earlier,
+one failed request could leave a database transaction open and block every write until a
+restart (BUG-17). Each request now gets its own database connection, rolled back if anything
+is left open.
+
+**Odd input.** A reason field starting with an invisible NUL character made SQLite's length
+check see an empty string, so a judge's recusal was silently dropped while the audit log
+recorded it (BUG-36). Requests containing NUL are now refused outright.
+
+**The official checker has a trap.** Our first README suggested moving the fixture event's
+deadline into the future to demo submissions. That makes the checker's "closed event refuses
+submissions" check fail, and since T1 is the floor, the report says "verified nothing". The
+organizer page now warns about it, and `./scripts/check.sh` runs on its own copy of the data.
 
 ## Checking it yourself
 
@@ -111,7 +153,8 @@ Stop your own portal first, because both use port 8080. The same script runs in 
 on every push. If you run `run.py` by hand behind an HTTP proxy, set
 `no_proxy=localhost,127.0.0.1` first, or every check fails to connect.
 
-The test suite (`tests/golden/`, about 520 cases) runs with:
+The test suite (about 530 cases, including end-to-end runs of the real `run.py` against a real
+server) runs with:
 
 ```
 pip install -r requirements.txt pytest httpx
@@ -146,39 +189,15 @@ curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/js
 To embed the gallery on another site:
 `<script src="http://localhost:8080/widget.js" data-event="evt_01"></script>`
 
-## How this was built
-
-Built inside the 72-hour window with AI coding agents, which the brief expects. The code was written by Claude Code (Claude Opus 5.5) under our direction, and the commit history
-says so: every commit carries a `Co-Authored-By: Claude` line, and 25 of the 43 commits came
-from a Claude Code session running in the cloud, which we reviewed before merging.
-
-What kept the code honest was process, not the model:
-
-- Every module started as a contract in `contracts/`: input and expected-output cases, written
-  and approved before any code. The stack, the duplicate-submission rule, the normalization
-  method and the T3/T4 designs were decided by us, not the agent.
-- For most of the build, the agent that wrote the code did not write its tests. Separate agents
-  wrote the tests in `tests/golden/` from the contracts alone, then tried to break the code:
-  forged requests, concurrent requests, malformed input, around 30,000 fuzzed requests in the
-  last pass. The exception is the cloud session, which wrote tests for its own additions
-  (`test_teams.py`, `test_system.py`, `test_research_features.py`); a separate
-  agent then re-checked its voting code and found the BUG-31 to BUG-35 holes. We also
-  tried a second model family for review; OpenAI Codex was out of quota, and Gemini (through
-  Antigravity) reviewed the core logic once.
-- Every bug found went into `BUGLOG.md` with a test that reproduces it. There are 37. Some were
-  serious: an organizer could reset a judge's password through the invite form (BUG-8), and for
-  a while the organizer's audit log showed who voted for what while voting was still open
-  (BUG-31).
-
 ## Docs
 
 - `ARCHITECTURE.md`: how the pieces fit together and why
 - `DATA-MODEL.md`: the schema, and how data gets in and out
 - `JUDGING.md`: assignment, the scoring maths, normalization and its limits
-- `THREAT-MODEL.md`: sybil votes, ballot stuffing, judge collusion, deadline gaming; what is
-  stopped and what is not
+- `THREAT-MODEL.md`: sybil votes, ballot stuffing, judge collusion and deadline gaming, with
+  what is stopped and what is not
 - `RESEARCH.md`: what other platforms do, and what we took or left
-- `contracts/`: the specs the code was built against
+- `contracts/`: the specs each part was built against
 - `BUGLOG.md`: every bug found, and the test that now guards it
 
 ## Honest limits
@@ -188,13 +207,12 @@ What kept the code honest was process, not the model:
 - There is no password reset and no two-factor login. The 91 fixture participants have no
   password, so only the demo participant can log in.
 - Voting only requires a login. Without email verification or a CAPTCHA, one person with many
-  mailboxes gets many votes; the portal flags likely duplicates for the organizer rather than
-  stopping them.
-- The published ranking uses plain per-judge z-scores. Judges who scored only two or three
-  projects make it noisy. A shrunk ranking that corrects for this is shown next to it, but only
-  as advice.
+  mailboxes gets many votes; the portal flags likely duplicates for the organizer but cannot
+  stop them.
+- The published ranking uses plain per-judge z-scores, which judges with only two or three
+  reviews make noisy. The shrunk ranking beside it corrects for this, but only as a warning.
 - Eligibility is automatic for "submitted, not a duplicate, before the deadline", and otherwise
-  an organizer's audited call. There are no per-track rules.
+  an organizer's audited decision. There are no per-track rules.
 - Rate-limit counters live in memory, so a restart clears them.
 - The container ignores `X-Forwarded-For`. Behind a reverse proxy every visitor shares the
   proxy's IP, which weakens the per-IP limits and flags. To trust your proxy, remove

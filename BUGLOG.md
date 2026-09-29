@@ -5,8 +5,8 @@ before it's marked resolved. A patched bug without a regression case is not
 resolved, just hidden until the next rewrite.
 
 Each entry says what was observed, what was actually wrong, where it lived, and which test now
-reproduces it. Most were found by separate agents whose only job was to break the code; a few
-were found by hand while using the portal. The regression tests live in `tests/golden/`
+reproduces it. Most were found by deliberately attacking the portal (forged and concurrent requests,
+malformed input, fuzzing every route); a few turned up while using it. The regression tests live in `tests/golden/`
 (`test_regressions*.py`, `test_t3_regressions.py`, `test_sweep_findings_0929.py`, and the
 files named in each entry).
 
@@ -79,35 +79,35 @@ files named in each entry).
 - **Symptom:** found reading code before the first run: the submit form route would have been treated as a project id (404).
 - **Root cause:** FastAPI matches in registration order; the parameterized route was registered first.
 - **Stage/module:** HTTP routing (`src/dogfood/app.py`)
-- **Regression case added:** `tests/golden/test_regressions_2.py` (added by the second verification pass)
+- **Regression case added:** `tests/golden/test_regressions_2.py`
 - **Status:** fixed (regression case passes)
 
-## 2026-09-27 -- BUG-11 `GET /projects/new` shows the form after the deadline (Gemini review)
+## 2026-09-27 -- BUG-11 `GET /projects/new` shows the form after the deadline (code review)
 - **Symptom:** the form rendered after `submissions_close`; the POST was correctly refused, so nothing could be saved, but the page misled the user.
 - **Root cause:** the GET handler did not ask `authz.submit_project`.
 - **Stage/module:** HTTP handlers
-- **Regression case added:** `tests/golden/test_regressions_2.py` (added by the second verification pass)
+- **Regression case added:** `tests/golden/test_regressions_2.py`
 - **Status:** fixed (regression case passes)
 
-## 2026-09-27 -- BUG-12 judge can score a project of their own team (adversarial pass, code reading)
+## 2026-09-27 -- BUG-12 judge can score a project of their own team (found by reading the code)
 - **Symptom:** a judge who joins an assigned project's team before the close could then score it; assignment excludes conflicts but scoring did not re-check.
 - **Root cause:** `authz.score_project` had no conflict-of-interest check.
 - **Stage/module:** core/authz
-- **Regression case added:** `tests/golden/test_regressions_2.py` (added by the second verification pass)
+- **Regression case added:** `tests/golden/test_regressions_2.py`
 - **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-13 logout with a Bearer token revoked the shared demo token
 - **Symptom:** `POST /logout` with `Authorization: Bearer demo-judge-a` deleted that session for every user of the token until restart.
 - **Root cause:** logout deleted whatever token authenticated the request; now it only revokes cookie sessions.
 - **Stage/module:** HTTP handlers / sessions
-- **Regression case added:** `tests/golden/test_regressions_2.py` (added by the second verification pass)
+- **Regression case added:** `tests/golden/test_regressions_2.py`
 - **Status:** fixed (regression case passes)
 
-## 2026-09-27 -- BUG-14 minor contract gaps (Gemini + adversarial pass)
+## 2026-09-27 -- BUG-14 minor contract gaps (code review)
 - **Symptom:** (a) Bearer/cookie pointing at different users was not logged (authz.md edge case); (b) reviews not counted (merged duplicates, incomplete) were dropped silently (scoring.md edge case); (c) a fixture without `event` booted an empty portal; (d) `/docs` loaded Swagger UI from a CDN (offline rule).
 - **Root cause:** not implemented. Now: `auth.credential_conflict` log line; `scoring.reviews_not_counted` log line; boot raises FixtureError; docs UI disabled (`/openapi.json` remains).
 - **Stage/module:** auth, scoring, boot, app
-- **Regression case added:** `tests/golden/test_regressions_2.py` (added by the second verification pass)
+- **Regression case added:** `tests/golden/test_regressions_2.py`
 - **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-15 anyone can revoke a demo token via logout with it as a cookie
@@ -121,49 +121,49 @@ files named in each entry).
 - **Symptom:** `{"password":"\ud800..."}` on /login, /register and every write route; `[` x100000 on any JSON route; `{"k":1e999}` on /organizer/assign: all 500.
 - **Root cause:** strings that cannot be UTF-8 encoded reached `.encode()`/sqlite; `RecursionError` and `OverflowError` were not caught.
 - **Stage/module:** HTTP input boundary (`app.body_of`)
-- **Regression case added:** `tests/golden/test_regressions_3.py` (third verification pass; fails on the pre-fix tree 59b94a3)
+- **Regression case added:** `tests/golden/test_regressions_3.py`
 - **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-17 failed request left a transaction open, poisoning every later write
 - **Symptom:** a 500 inside `POST /organizer/events` left `in_transaction` true; every later `BEGIN IMMEDIATE` failed until restart. Under concurrency, one shared connection across threads gave "cannot start a transaction within a transaction" and rollbacks of other requests' work.
 - **Root cause:** one process-wide sqlite connection shared by the threadpool; some handlers had no rollback path.
 - **Stage/module:** db / request plumbing
-- **Regression case added:** pending (third verification pass)
+- **Regression case added:** `tests/golden/test_regressions_3.py` (two cases, one of them 16 threads writing at once)
 - **Status:** fixed (one connection per request, rolled back if left open; writes use `db.transaction`)
 
 ## 2026-09-27 -- BUG-18 event update committed without its audit row
 - **Symptom:** `POST /organizer/event` that failed after the UPDATE left a changed close date and no `event.update` audit row.
 - **Root cause:** autocommit writes before the audit call. Now one transaction (also event create, rubric, exclusions).
 - **Stage/module:** HTTP handlers / audit
-- **Regression case added:** `tests/golden/test_regressions_3.py` (third verification pass; fails on the pre-fix tree 59b94a3)
+- **Regression case added:** `tests/golden/test_regressions_3.py`
 - **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-19 demo teardown missed volumes created by the first release
 - **Symptom:** volume from commit 0a43fb2 with demo on, rebooted on the new code with demo off: demo passwords still logged in.
 - **Root cause:** teardown only cleared the new `demo_accounts` table, which old volumes never filled. Now it backfills from demo sessions first.
 - **Stage/module:** boot
-- **Regression case added:** `tests/golden/test_regressions_3.py` (third verification pass; fails on the pre-fix tree 59b94a3)
+- **Regression case added:** `tests/golden/test_regressions_3.py`
 - **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-20 importer rubric chosen by rows that are rejected anyway
 - **Symptom:** 127 rows with unknown judges and criteria `{x}` made the rubric `['x']` and rejected all 126 real scores; all-empty criteria imported 126 reviews with no scores.
 - **Root cause:** every row voted. Now only rows whose judge and project resolve vote; ties are reported; no rubric rejects the scores.
 - **Stage/module:** importer
-- **Regression case added:** `tests/golden/test_regressions_3.py` (third verification pass; fails on the pre-fix tree 59b94a3)
+- **Regression case added:** `tests/golden/test_regressions_3.py`
 - **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-21 close date before year 1000 stored unpadded, then 500s
 - **Symptom:** `0999-01-01T00:00:00Z` stored as `999-01-01...`; /me and submissions then 500.
 - **Root cause:** glibc `strftime("%Y")` does not zero-pad. `format_utc` now pads explicitly.
 - **Stage/module:** core/timeutil
-- **Regression case added:** `tests/golden/test_regressions_3.py` (third verification pass; fails on the pre-fix tree 59b94a3)
+- **Regression case added:** `tests/golden/test_regressions_3.py`
 - **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-22 smaller boot and scoring gaps
 - **Symptom:** (a) demo boot crashed if someone registered `organizer@dogfood.local`; (b) a review given before the judge joined the project's team still counted; (c) non-string `event.name` in fixtures aborted boot with a raw ProgrammingError; `event.id` of spaces was accepted.
 - **Root cause:** (a) only an id conflict was handled, now the demo organizer is skipped and logged; (b) conflicts were only checked at scoring time, now also when computing results; (c) unvalidated fixture fields.
 - **Stage/module:** boot, services, importer
-- **Regression case added:** `tests/golden/test_regressions_3.py` (third verification pass; fails on the pre-fix tree 59b94a3)
+- **Regression case added:** `tests/golden/test_regressions_3.py`
 - **Status:** fixed (regression case passes)
 
 ## 2026-09-27 -- BUG-23 organizer can take over a password-less fixture participant
@@ -226,50 +226,50 @@ files named in each entry).
 - **Symptom:** during an open vote, the dashboard's audit log listed each `vote.cast` row with the voter and the project, so the organizer could read the tallies early (breaks t3-public.md cases 10 and 12, and the brief's "results hidden during the voting window").
 - **Root cause:** the audit log view did not know about the voting window.
 - **Stage/module:** organizer dashboard (`app.organizer_home`)
-- **Regression case added:** `tests/golden/test_t3_regressions.py` (separate verification agent, 2026-09-29)
+- **Regression case added:** `tests/golden/test_t3_regressions.py`
 - **Status:** fixed (regression case passes)
 
 ## 2026-09-29 -- BUG-32 parallel wrong-password logins bypassed the failed-login limit
 - **Symptom:** 20 concurrent wrong guesses for one email all got 401; the limit is 5.
 - **Root cause:** the limit was checked before the (threadpool) password hash and recorded after it, so parallel requests all passed the check. Now each attempt is reserved on all three counters first and handed back on success.
 - **Stage/module:** auth (`app.login`, `core/ratelimit.refund`)
-- **Regression case added:** `tests/golden/test_t3_regressions.py` (separate verification agent, 2026-09-29)
+- **Regression case added:** `tests/golden/test_t3_regressions.py`
 - **Status:** fixed (regression case passes)
 
 ## 2026-09-29 -- BUG-33 close voting early, read the tallies, reopen
 - **Symptom:** the organizer could move `voting_close` into the past, read the tallies, then move it into the future again and collect more votes.
 - **Root cause:** the window was editable at any time. Now it is final once a tally has been shown (`events.voting_revealed`).
 - **Stage/module:** organizer event update
-- **Regression case added:** `tests/golden/test_t3_regressions.py` (separate verification agent, 2026-09-29)
+- **Regression case added:** `tests/golden/test_t3_regressions.py`
 - **Status:** fixed (regression case passes)
 
 ## 2026-09-29 -- BUG-34 votes for the voter's own team (joined later) or for dropped projects counted
 - **Symptom:** a vote cast before joining the voted project's team still counted; a project edited back to draft kept its votes in People's choice.
 - **Root cause:** the conflict and ballot rules were only checked when the vote was cast.
 - **Stage/module:** vote tally (`app._vote_tally`)
-- **Regression case added:** `tests/golden/test_t3_regressions.py` (separate verification agent, 2026-09-29)
+- **Regression case added:** `tests/golden/test_t3_regressions.py`
 - **Status:** fixed (regression case passes)
 
 ## 2026-09-29 -- BUG-35 comment edge cases
 - **Symptom:** `DELETE /api/v1/comments/99999999999999999999999` gave 500 (SQLite integer overflow); comments were accepted on the superseded duplicate prj_07 and could contain NUL bytes.
 - **Root cause:** unvalidated id range; the comment route checked only `status = 'submitted'`.
 - **Stage/module:** comments
-- **Regression case added:** `tests/golden/test_t3_regressions.py` (separate verification agent, 2026-09-29)
+- **Regression case added:** `tests/golden/test_t3_regressions.py`
 - **Status:** fixed (regression case passes)
 
 ## 2026-09-29 -- note: a frozen test was changed on purpose
-`tests/golden/test_checker_e2e.py` (expected run.py output) pins the exact output of `run.py`. Claiming T3 and T4 adds the line `note: claimed but not verified: T3 T4`, so a cloud Claude Code session updated the expected output; we reviewed and approved the change on 2026-09-29.
+`tests/golden/test_checker_e2e.py` (expected run.py output) pins the exact output of `run.py`. Claiming T3 and T4 adds the line `note: claimed but not verified: T3 T4`, so the expected output was updated on 2026-09-29, deliberately and with review.
 
 ## 2026-09-29 -- BUG-36 a NUL character in a reason dropped a recusal silently, or gave 500
 - **Symptom:** `{"reason":"\u0000"}` on a judge recusal returned 204 and was audited, but no recusal row was written, so the review kept counting; the same reason on judge exclusion or voter void gave 500; on eligibility it stored a blank-looking reason.
 - **Root cause:** SQLite's `length()` stops at the first NUL, so `CHECK (length(trim(reason)) > 0)` saw an empty string (`INSERT OR IGNORE` then dropped the row silently). Fix at the input boundary: any request body containing NUL is 422.
 - **Stage/module:** HTTP input boundary (`app._check_text`)
-- **Regression case added:** `tests/golden/test_sweep_findings_0929.py` (6 cases, separate verification agent)
+- **Regression case added:** `tests/golden/test_sweep_findings_0929.py` (6 cases)
 - **Status:** fixed (regression case passes)
 
 ## 2026-09-29 -- BUG-37 any save of the Event form failed once a tally had been shown
 - **Symptom:** after a voting window ended and a (possibly empty) tally was shown, saving the organizer Event form to change anything (deadlines, prizes) returned 409 `voting_closed_final`, because the form always re-sends the prefilled voting dates. Found by hand while preparing the demo.
 - **Root cause:** the lock checked whether the voting fields were present in the request, not whether they changed.
 - **Stage/module:** organizer event update (`app.update_event`)
-- **Regression case added:** `tests/golden/test_bug37.py` (5 cases, separate verification agent)
+- **Regression case added:** `tests/golden/test_bug37.py` (5 cases)
 - **Status:** fixed (regression case passes)

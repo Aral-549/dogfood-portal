@@ -47,7 +47,7 @@ def _resample_means(rng: random.Random, reviewed: list[str], zs: Mapping[str, li
 
     random.Random.choice(v) is v[_randbelow(len(v))], and _randbelow(n) is getrandbits(n.bit_length())
     repeated until < n. Inlining that consumes the identical random stream; sum() over a list keeps
-    the float arithmetic identical too. A golden test pins the equivalence, so a Python whose
+    the float arithmetic identical too. A test pins the equivalence, so a Python whose
     Random works differently fails loudly instead of changing published confidence silently.
     """
     getrandbits = rng.getrandbits
