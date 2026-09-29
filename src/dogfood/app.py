@@ -243,10 +243,13 @@ async def bad_input(request: Request, exc: BadInput):
 
 
 def _check_text(value, depth: int = 0) -> None:
-    """Reject strings that cannot be stored as UTF-8 (lone surrogates) anywhere in the body."""
+    """Reject strings that cannot be stored safely anywhere in the body: lone surrogates (not UTF-8)
+    and NUL, which SQLite's length() stops at, so CHECK constraints saw "" and rows were dropped or 500'd."""
     if depth > 32:
         raise BadInput("body is nested too deeply")
     if isinstance(value, str):
+        if "\x00" in value:
+            raise BadInput("body contains a NUL character")
         try:
             value.encode("utf-8")
         except UnicodeEncodeError:
