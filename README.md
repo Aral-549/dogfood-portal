@@ -168,9 +168,12 @@ explains what we adopted:
   who scored few projects. See `JUDGING.md`, "Known limits".
 - Eligibility is "submitted, not superseded, before the deadline" plus an organizer's
   audited ruling (Organizer page, "Eligibility"); there are no automatic per-track rules.
-- No password reset, and no rate limiting on login. The 91 fixture participants have no
+- No password reset and no two-factor login (failed logins are rate limited). The 91 fixture participants have no
   password; only the demo participant can log in. (Judges get a set-password link
   from the organizer; it only works for accounts that have no password yet and are
   not on a team, so an organizer can never claim a participant's account.)
 - `/docs` (Swagger UI) is disabled because it loads from a CDN; the schema is at `/openapi.json`.
-- T3 (public voting) and T4 (API/webhooks/certificates) are not implemented.
+- Community voting is authenticated only: no email verification (offline rule) and no
+  CAPTCHA, so one person with many mailboxes gets many votes. Duplicate and many-per-IP
+  accounts are flagged for the organizer instead. See `THREAT-MODEL.md`.
+- Rate-limit counters live in memory, so a restart clears them.
