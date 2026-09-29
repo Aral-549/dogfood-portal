@@ -23,6 +23,7 @@ ADDED_COLUMNS = [
     ("events", "voting_close", "TEXT"),
     ("events", "votes_per_voter", "INTEGER NOT NULL DEFAULT 1 CHECK (votes_per_voter >= 1)"),
     ("events", "voting_closed_sent", "INTEGER NOT NULL DEFAULT 0"),
+    ("events", "voting_revealed", "INTEGER NOT NULL DEFAULT 0"),  # 1 once any tally was shown: window final
     ("users", "email_norm", "TEXT"),
     ("records", "revoked_at", "TEXT"),
     ("records", "revoked_reason", "TEXT"),

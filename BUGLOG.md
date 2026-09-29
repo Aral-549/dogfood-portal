@@ -219,3 +219,41 @@ Entries below come from the 2026-09-27 adversarial pass. Regression cases are in
 - **Stage/module:** T4 import route (`app.import_event`)
 - **Regression case added:** `tests/golden/test_t4.py` -- `test_api_case12_13_import_conflict_malformed_and_authz`
 - **Status:** fixed (409 `ids_in_use` before anything is written; regression case passes)
+
+## 2026-09-29 -- BUG-31 organizer dashboard showed who voted for what while voting was open
+- **Symptom:** during an open vote, the dashboard's audit log listed each `vote.cast` row with the voter and the project, so the organizer could read the tallies early (breaks t3-public.md cases 10 and 12, and the brief's "results hidden during the voting window").
+- **Root cause:** the audit log view did not know about the voting window.
+- **Stage/module:** organizer dashboard (`app.organizer_home`)
+- **Regression case added:** pending (verification agent, test_t3_regressions.py)
+- **Status:** fixed, regression case pending
+
+## 2026-09-29 -- BUG-32 parallel wrong-password logins bypassed the failed-login limit
+- **Symptom:** 20 concurrent wrong guesses for one email all got 401; the limit is 5.
+- **Root cause:** the limit was checked before the (threadpool) password hash and recorded after it, so parallel requests all passed the check. Now each attempt is reserved on all three counters first and handed back on success.
+- **Stage/module:** auth (`app.login`, `core/ratelimit.refund`)
+- **Regression case added:** pending (verification agent, test_t3_regressions.py)
+- **Status:** fixed, regression case pending
+
+## 2026-09-29 -- BUG-33 close voting early, read the tallies, reopen
+- **Symptom:** the organizer could move `voting_close` into the past, read the tallies, then move it into the future again and collect more votes.
+- **Root cause:** the window was editable at any time. Now it is final once a tally has been shown (`events.voting_revealed`).
+- **Stage/module:** organizer event update
+- **Regression case added:** pending (verification agent, test_t3_regressions.py)
+- **Status:** fixed, regression case pending
+
+## 2026-09-29 -- BUG-34 votes for the voter's own team (joined later) or for dropped projects counted
+- **Symptom:** a vote cast before joining the voted project's team still counted; a project edited back to draft kept its votes in People's choice.
+- **Root cause:** the conflict and ballot rules were only checked when the vote was cast.
+- **Stage/module:** vote tally (`app._vote_tally`)
+- **Regression case added:** pending (verification agent, test_t3_regressions.py)
+- **Status:** fixed, regression case pending
+
+## 2026-09-29 -- BUG-35 comment edge cases
+- **Symptom:** `DELETE /api/v1/comments/99999999999999999999999` gave 500 (SQLite integer overflow); comments were accepted on the superseded duplicate prj_07 and could contain NUL bytes.
+- **Root cause:** unvalidated id range; the comment route checked only `status = 'submitted'`.
+- **Stage/module:** comments
+- **Regression case added:** pending (verification agent, test_t3_regressions.py)
+- **Status:** fixed, regression case pending
+
+## 2026-09-29 -- note: frozen golden test changed with human approval
+`tests/golden/test_checker_e2e.py` (expected run.py output) was changed by the cloud session to match the T3/T4 claim; approved by the human on 2026-09-29 (AGENTS.md rule 3).

@@ -40,9 +40,15 @@ with shell access to the host or the data volume.
 - 10 votes or withdrawals per minute per account, then 429 with `Retry-After` (case 18).
 - **Tallies are hidden from everyone, organizers included, until the window closes** (case 10),
   so nobody can see who is losing and target them, and a late bandwagon has nothing to follow.
+  That includes the organizer's audit log, whose vote rows are masked until close (BUG-31, found
+  in review: before the fix the dashboard showed who voted for what).
+- **No peek-and-reopen.** Once any tally has been shown, the voting window can no longer move
+  (409 `voting_closed_final`, BUG-33). Closing early to read the tallies and then reopening is
+  refused.
 - **Ballot order is random per voter and stable across reloads**
   (`sha256(event:user:project)`, case 13): no project benefits from always being listed first.
-- Every vote and withdrawal is in the audit log (`vote.cast`, `vote.withdraw`).
+- Every vote and withdrawal is in the audit log (`vote.cast`, `vote.withdraw`), readable by the
+  organizer after voting closes.
 
 **Not stopped**
 - Brigading by real people (a team asking its friends to register and vote). That is not
@@ -96,7 +102,7 @@ with shell access to the host or the data volume.
 | Attack | What stops it | Gap |
 |---|---|---|
 | Role escalation (participant acts as judge or organizer) | Every protected route asks `core/authz` first; API tokens carry only their creator's roles | none known; `test_authz*.py` |
-| Password guessing | scrypt hashes; failed logins limited per email+IP (5), per email (20), per IP (50) in 5 min; a stranger cannot lock the owner out | no 2FA |
+| Password guessing | scrypt hashes; failed logins limited per email+IP (5), per email (20), per IP (50) in 5 min; each attempt is reserved before the hash, so parallel guesses cannot slip past (BUG-32); a stranger cannot lock the owner out | no 2FA |
 | CSRF on cookie sessions | SameSite=Lax cookies plus an Origin/Referer same-host check on every unsafe request | |
 | Clickjacking | `X-Frame-Options: DENY` and `frame-ancestors 'none'` everywhere except the embed widget | |
 | Stolen session token | Only SHA-256 of tokens is stored; cookies HttpOnly, Secure over HTTPS; API tokens revocable, last use shown | no device list for cookie sessions |

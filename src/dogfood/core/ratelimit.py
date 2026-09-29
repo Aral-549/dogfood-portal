@@ -68,6 +68,16 @@ class SlidingWindow:
                 return True, max(0.0, q[0] + self.window - now)
             return False, 0.0
 
+    def refund(self, key: str, stamp: float) -> None:
+        """Remove one attempt recorded at `stamp` (a reserved login that turned out to succeed)."""
+        with self._lock:
+            q = self._hits.get(key)
+            if q:
+                try:
+                    q.remove(stamp)
+                except ValueError:
+                    pass
+
     def reset(self, key: str) -> None:
         with self._lock:
             self._hits.pop(key, None)

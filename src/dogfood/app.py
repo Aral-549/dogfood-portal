@@ -367,14 +367,21 @@ async def login(request: Request):
     limits, ip = request.app.state.limits, _client_ip(request)
     counters = ((limits["login_fail"], f"{email}|{ip}"), (limits["login_fail_email"], email),
                 (limits["login_fail_ip"], ip))
+    # Reserve the attempt on every counter BEFORE hashing, so parallel guesses cannot all pass the
+    # gate; a success hands the reservations back. Only failures count.
+    stamp, reserved = _mono(), []
     for window, key in counters:
-        blocked, retry = window.blocked(key, _mono())
-        if blocked:
+        allowed, retry = window.hit(key, stamp)
+        if not allowed:
+            for w, k in reserved:
+                w.refund(k, stamp)
             return _too_many(request, retry, "too many failed logins; try again later")
+        reserved.append((window, key))
     row = conn.execute("SELECT id, password_hash FROM users WHERE email = ?", (email,)).fetchone()
-    if not await run_in_threadpool(svc.check_password, password, row["password_hash"] if row else None):
-        for window, key in counters:
-            window.hit(key, _mono())
+    if await run_in_threadpool(svc.check_password, password, row["password_hash"] if row else None):
+        for w, k in reserved:
+            w.refund(k, stamp)
+    else:
         logs.stage("auth", "login_failed", request_id=request.state.request_id)
         if wants_json(request):
             return JSONResponse({"error": "invalid_credentials"}, status_code=401)
@@ -921,6 +928,10 @@ def organizer_home(request: Request):
     duplicates = [(pid, m["superseded_by"]) for pid, m in meta.items() if m["superseded_by"]]
     audit_rows = conn.execute("SELECT * FROM audit_log WHERE event_id = ? OR event_id IS NULL ORDER BY id DESC LIMIT 50",
                               (ev["id"],)).fetchall()
+    if _vstate(ev, request.state.now) != "closed":
+        # Vote rows name voter and project: masked until voting closes, like the tallies (t3-public.md case 12).
+        audit_rows = [dict(a) | ({"actor": "hidden", "subject": "hidden until voting closes", "detail": "{}"}
+                                 if a["action"].startswith("vote.") else {}) for a in audit_rows]
     judges = conn.execute("SELECT j.id, u.email FROM judges j JOIN users u ON u.id = j.user_id WHERE j.event_id = ?",
                           (ev["id"],)).fetchall()
     tracks = conn.execute("SELECT id, name FROM tracks WHERE event_id = ? ORDER BY id", (ev["id"],)).fetchall()
@@ -1086,6 +1097,11 @@ async def update_event(request: Request):
             changes["votes_per_voter"] = vpv
     except (ValueError, OverflowError) as e:
         return JSONResponse({"error": "invalid", "detail": str(e)}, status_code=422)
+    if ("voting_open" in changes or "voting_close" in changes) and ev["voting_revealed"]:
+        # Tallies have been shown: moving the window now would allow close-early, peek, reopen.
+        return JSONResponse({"error": "voting_closed_final",
+                             "detail": "vote tallies have been shown; the voting window can no longer change"},
+                            status_code=409)
     v_open = changes.get("voting_open", ev["voting_open"])
     v_close = changes.get("voting_close", ev["voting_close"])
     if bool(v_open) != bool(v_close) and ("voting_open" in changes or "voting_close" in changes):
@@ -1333,12 +1349,22 @@ def vote_page(request: Request):
 
 
 def _vote_tally(conn, event_id: str) -> list[dict]:
+    """Every tally shown to anyone comes from here, so this is where the window becomes final."""
+    conn.execute("UPDATE events SET voting_revealed = 1 WHERE id = ? AND voting_revealed = 0", (event_id,))
     votes = conn.execute("SELECT user_id, project_id FROM votes WHERE event_id = ?", (event_id,)).fetchall()
     voided = {r["user_id"] for r in conn.execute("SELECT user_id FROM voided_voters WHERE event_id = ?", (event_id,))}
     # Judges do not vote (case 7). Someone who voted and was made a judge afterwards stops counting too.
     voided |= {r["user_id"] for r in conn.execute("SELECT user_id FROM judges WHERE event_id = ?", (event_id,))}
     ruled_out = set(svc.ineligible(conn, event_id))
-    return tally(((v["user_id"], v["project_id"]) for v in votes if v["project_id"] not in ruled_out), voided)
+    on_ballot = {r["id"] for r in conn.execute("SELECT id FROM projects WHERE event_id = ? AND status = 'submitted' "
+                                               "AND superseded_by IS NULL", (event_id,))}
+    # Never a vote for the voter's own team, even one given before they joined it.
+    own = {(r["user_id"], r["project_id"]) for r in conn.execute(
+        "SELECT m.user_id, p.id AS project_id FROM team_members m JOIN projects p ON p.team_id = m.team_id "
+        "WHERE p.event_id = ?", (event_id,))}
+    return tally(((v["user_id"], v["project_id"]) for v in votes
+                  if v["project_id"] not in ruled_out and v["project_id"] in on_ballot
+                  and (v["user_id"], v["project_id"]) not in own), voided)
 
 
 async def _project_from_body(request: Request, project_id: str | None) -> str:
@@ -1458,12 +1484,13 @@ async def add_comment(request: Request, project_id: str):
     conn, actor = conn_of(request), actor_of(request)
     if not actor.authenticated:
         return deny(request, Decision.UNAUTHENTICATED)
-    p = conn.execute("SELECT event_id FROM projects WHERE id = ? AND status = 'submitted'", (project_id,)).fetchone()
+    p = conn.execute("SELECT event_id FROM projects WHERE id = ? AND status = 'submitted' AND superseded_by IS NULL",
+                     (project_id,)).fetchone()
     if p is None:
         return deny(request, Decision.NOT_FOUND)
     raw = (await body_of(request)).get("body")
     body = raw.strip() if isinstance(raw, str) else ""
-    if not 1 <= len(body) <= 2000:
+    if not 1 <= len(body) <= 2000 or "\x00" in body:
         return JSONResponse({"error": "invalid", "detail": "comment must be 1 to 2000 characters"}, status_code=422)
     ok, retry = request.app.state.limits["comment"].hit(actor.user_id, _mono())
     if not ok:
@@ -1480,6 +1507,8 @@ async def add_comment(request: Request, project_id: str):
 @app.delete("/api/v1/comments/{comment_id}")
 @app.post("/comments/{comment_id}/delete")
 def delete_comment(request: Request, comment_id: int):
+    if not 0 < comment_id < 2**63:
+        return deny(request, Decision.NOT_FOUND)
     conn, actor = conn_of(request), actor_of(request)
     c = conn.execute("SELECT c.id, c.user_id, c.project_id, p.event_id FROM comments c "
                      "JOIN projects p ON p.id = c.project_id WHERE c.id = ? AND c.deleted_at IS NULL",
@@ -1776,7 +1805,10 @@ def export_event(request: Request, event_id: str):
     decision = authz.export_results(actor_of(request), event_id)
     if not decision.allowed:
         return deny(request, decision)
-    body = svc.export_event(conn, ev, voting_closed=_vstate(ev, request.state.now) == "closed")
+    voting_closed = _vstate(ev, request.state.now) == "closed"
+    if voting_closed:  # the export carries every vote, so it counts as showing the tallies
+        conn.execute("UPDATE events SET voting_revealed = 1 WHERE id = ?", (ev["id"],))
+    body = svc.export_event(conn, ev, voting_closed=voting_closed)
     svc.audit(conn, actor_of(request), event_id, "event.export", event_id)
     return JSONResponse(body, headers={"Content-Disposition": f'attachment; filename="{event_id}.json"'})
 
