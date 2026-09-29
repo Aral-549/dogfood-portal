@@ -58,7 +58,4 @@ Hand-computed. Equal weights unless stated. Values to 4 dp.
 - Deciding who judges what (assignment contract).
 
 ## Status
-- [x] Drafted
-- [ ] Reviewed by a human
-- [ ] Implementation matches this contract
-- [ ] Golden tests exist for every behavior case above
+Implemented. Tests: test_scoring.py. The design decisions in it were approved before implementation; the cases were not reviewed one by one.

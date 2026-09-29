@@ -44,11 +44,8 @@ Open iff `now < submissions_close` (strict). At exactly the close instant it is 
 - Body sent as `application/json` (checker) and as form data (HTML form) behave the same.
 
 ## Explicitly out of scope
-- Team formation and invites (next batch).
-- Deadline extension UI (next batch; must write an audit entry).
+- Team formation and invites: `lifecycle.md` cases 6 to 9.
+- Moving the deadline: `lifecycle.md` case 12 (audited).
 
 ## Status
-- [x] Drafted
-- [ ] Reviewed by a human
-- [ ] Implementation matches this contract
-- [ ] Golden tests exist for every behavior case above
+Implemented. Tests: test_submissions.py. The design decisions in it were approved before implementation; the cases were not reviewed one by one.

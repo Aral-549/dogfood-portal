@@ -29,10 +29,7 @@ by authz before this runs; numbers come from core/scoring unchanged.
 - Empty event (no projects): header line only, still 200.
 
 ## Explicitly out of scope
-- Raw per-review export (separate export, next batch).
+- Raw per-review export. The full event export in `t4-api-webhooks-bulk.md` covers it.
 
 ## Status
-- [x] Drafted
-- [ ] Reviewed by a human
-- [ ] Implementation matches this contract
-- [ ] Golden tests exist for every behavior case above
+Implemented. Tests: test_csv_export.py. The design decisions in it were approved before implementation; the cases were not reviewed one by one.

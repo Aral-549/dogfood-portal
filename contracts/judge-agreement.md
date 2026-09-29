@@ -57,7 +57,4 @@ Excluded reviews are never deleted: exclusion is a flag on the judge for that ev
 - Detecting collusion between two judges (pairwise); documented as future work in JUDGING.md.
 
 ## Status
-- [x] Drafted
-- [x] Reviewed by a human (approved 2026-09-27)
-- [ ] Implementation matches this contract
-- [ ] Golden tests exist for every behavior case above
+Implemented. Tests: test_agreement.py. The whole contract was approved before implementation.

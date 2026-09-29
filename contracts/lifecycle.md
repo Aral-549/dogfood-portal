@@ -65,10 +65,7 @@ project in or out of prizes.
 ## Explicitly out of scope
 - Email delivery (links are shown to the organizer to pass on; offline rule).
 - Automatic eligibility rules beyond the above (e.g. per-track restrictions).
-- T3/T4.
+- Voting, API, webhooks, certificates: `t3-public.md` and the two `t4-*.md` contracts.
 
 ## Status
-- [x] Drafted
-- [ ] Reviewed by a human
-- [ ] Implementation matches this contract
-- [ ] Golden tests exist for every behavior case above
+Implemented. Tests: test_submissions.py, test_authz_sessions.py, test_teams.py, test_research_features.py, and the regression files. The design decisions in it were approved before implementation; the cases were not reviewed one by one.

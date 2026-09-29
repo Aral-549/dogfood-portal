@@ -125,15 +125,15 @@ another project's z, and the ranking simply closes up (`core/scoring.without_pro
   Shrinking each judge's `mu`/`sd` toward the global values by review count
   would be more robust. We chose not to, to keep the method explainable in
   one paragraph. This is the first thing we would change. Meanwhile the
-  organizer dashboard shows it as an advisory check: a "Shrunk rank" column
+  organizer dashboard shows it as an advisory check (under "Show advanced columns"): a "Shrunk rank" column
   (each judge's mean and variance pulled toward the pooled values, weighted
   n : 3, `core/scoring.shrunk_ranks`) and a "prize line moves" flag on projects
   that are inside the top k under one normalization and outside under the
   other. The published ranking is unchanged. A third, independent reading sits
   beside it: an "Order rank" fitted by Bradley-Terry to every pair of projects a
   judge scored (who did the judge prefer?), which ignores generosity entirely
-  (`core/ordinal.py`, see `RESEARCH.md`). The flag is now "prize line disputed"
-  when any of the three disagree about the top k.
+  (`core/ordinal.py`, see `RESEARCH.md`). A project is flagged "prize line disputed"
+  when any of the three disagree about whether it is in the top k.
 - **Two-review judges are all-or-nothing.** A judge with exactly 2 reviews always
   produces z = -1 and +1 on each criterion where the scores differ: a 4-vs-5 judge
   moves the ranking as much as a 1-vs-5 judge. Shrinkage (or a floor on `sd`)

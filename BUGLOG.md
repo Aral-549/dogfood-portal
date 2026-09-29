@@ -2,11 +2,13 @@
 
 Every entry here must result in a permanent case added to `tests/golden/`
 before it's marked resolved. A patched bug without a regression case is not
-resolved -- it's just hidden until the next rewrite.
+resolved, just hidden until the next rewrite.
 
-Entries below come from the 2026-09-27 adversarial pass. Regression cases are in
-`tests/golden/test_regressions.py` (named `test_bugN_*`) and passed after the fixes of 2026-09-27 (174/175 golden tests; see the note on
-`test_case4_body_is_a_json_list` in `contracts/acceptance.md`).
+Each entry says what was observed, what was actually wrong, where it lived, and which test now
+reproduces it. Most were found by separate agents whose only job was to break the code; a few
+were found by hand while using the portal. The regression tests live in `tests/golden/`
+(`test_regressions*.py`, `test_t3_regressions.py`, `test_sweep_findings_0929.py`, and the
+files named in each entry).
 
 ---
 
@@ -255,8 +257,8 @@ Entries below come from the 2026-09-27 adversarial pass. Regression cases are in
 - **Regression case added:** `tests/golden/test_t3_regressions.py` (separate verification agent, 2026-09-29)
 - **Status:** fixed (regression case passes)
 
-## 2026-09-29 -- note: frozen golden test changed with human approval
-`tests/golden/test_checker_e2e.py` (expected run.py output) was changed by the cloud session to match the T3/T4 claim; approved by the human on 2026-09-29 (AGENTS.md rule 3).
+## 2026-09-29 -- note: a frozen test was changed on purpose
+`tests/golden/test_checker_e2e.py` (expected run.py output) pins the exact output of `run.py`. Claiming T3 and T4 adds the line `note: claimed but not verified: T3 T4`, so a cloud Claude Code session updated the expected output; we reviewed and approved the change on 2026-09-29.
 
 ## 2026-09-29 -- BUG-36 a NUL character in a reason dropped a recusal silently, or gave 500
 - **Symptom:** `{"reason":"\u0000"}` on a judge recusal returned 204 and was audited, but no recusal row was written, so the review kept counting; the same reason on judge exclusion or voter void gave 500; on eligibility it stored a blank-looking reason.
@@ -266,7 +268,7 @@ Entries below come from the 2026-09-27 adversarial pass. Regression cases are in
 - **Status:** fixed (regression case passes)
 
 ## 2026-09-29 -- BUG-37 any save of the Event form failed once a tally had been shown
-- **Symptom:** after a voting window ended and a (possibly empty) tally was shown, saving the organizer Event form to change anything (deadlines, prizes) returned 409 `voting_closed_final`, because the form always re-sends the prefilled voting dates. Reported by the human while preparing the demo.
+- **Symptom:** after a voting window ended and a (possibly empty) tally was shown, saving the organizer Event form to change anything (deadlines, prizes) returned 409 `voting_closed_final`, because the form always re-sends the prefilled voting dates. Found by hand while preparing the demo.
 - **Root cause:** the lock checked whether the voting fields were present in the request, not whether they changed.
 - **Stage/module:** organizer event update (`app.update_event`)
 - **Regression case added:** pending (separate verification agent)

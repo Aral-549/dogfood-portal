@@ -4,7 +4,7 @@
 Turns a request's credentials into an actor, then answers "may this actor do
 this action on this resource" before any data is read. Handlers only ever call
 authz and act on its decision; they never re-derive permissions. Login UI and
-session creation are handed off to the (not yet contracted) login flow.
+session creation are handed off to the login flow in `lifecycle.md`.
 
 ## Inputs
 - `credentials`: `Authorization: Bearer <token>` header or `session` cookie; may be absent or garbage
@@ -49,11 +49,8 @@ session row, never from anything the client sends (no `?role=`, no `X-Role`).
 - A judge who is also a participant on some team keeps both roles; being a judge never grants participant actions on teams they are not in.
 
 ## Explicitly out of scope
-- Password hashing / login form (login flow contract, next batch).
+- Password hashing and the login form: `lifecycle.md` cases 1 to 5.
 - Rate limiting (T3 anti-abuse).
 
 ## Status
-- [x] Drafted
-- [ ] Reviewed by a human
-- [ ] Implementation matches this contract
-- [ ] Golden tests exist for every behavior case above
+Implemented. Tests: test_authz.py, test_authz_sessions.py. The design decisions in it were approved before implementation; the cases were not reviewed one by one.

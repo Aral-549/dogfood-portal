@@ -71,7 +71,4 @@ separate result ("People's choice"). Authorization goes through `core/authz`.
 - Pairwise collusion detection between voters.
 
 ## Status
-- [x] Drafted
-- [x] Reviewed by a human (approved 2026-09-27)
-- [x] Implementation matches this contract
-- [x] Golden tests exist for every behavior case above
+Implemented. Tests: test_t3_public.py, test_t3_regressions.py. The whole contract was approved before implementation.

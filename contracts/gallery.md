@@ -31,7 +31,4 @@ Never exposes scores, judges, drafts or member emails.
 - Embeddable widget (T4).
 
 ## Status
-- [x] Drafted
-- [ ] Reviewed by a human
-- [ ] Implementation matches this contract
-- [ ] Golden tests exist for every behavior case above
+Implemented. Tests: test_acceptance.py (cases 1 and 2) and test_importer.py (duplicate hidden). Search, track filter, paging and the no-leak check (cases 2 to 8) have no dedicated test yet. The design decisions in it were approved before implementation; the cases were not reviewed one by one.

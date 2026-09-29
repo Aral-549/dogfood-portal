@@ -53,7 +53,4 @@ moved in and out of the portal. Authorization is unchanged: every API route asks
 - Importing into an existing event (merge).
 
 ## Status
-- [x] Drafted
-- [x] Reviewed by a human (approved 2026-09-27)
-- [x] Implementation matches this contract
-- [x] Golden tests exist for every behavior case above
+Implemented. Tests: test_t4.py. The whole contract was approved before implementation.

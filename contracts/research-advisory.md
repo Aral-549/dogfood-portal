@@ -37,7 +37,4 @@ winners. Everything here is advisory except recusal: nothing changes the publish
 - Changing the published ranking; automatic penalties; network checks of repositories.
 
 ## Status
-- [x] Drafted
-- [ ] Reviewed by a human
-- [x] Implementation matches this contract
-- [x] Golden tests exist for every behavior case above (`tests/golden/test_research_features.py`)
+Implemented. Tests: test_research_features.py. Written by the cloud session with its code; not separately reviewed.

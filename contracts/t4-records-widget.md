@@ -53,7 +53,4 @@ Judge record: `{type: "judge", record_id, event_id, event_name, judge_id, name, 
 - PDF generation server-side.
 
 ## Status
-- [x] Drafted
-- [x] Reviewed by a human (approved 2026-09-27)
-- [x] Implementation matches this contract
-- [x] Golden tests exist for every behavior case above
+Implemented. Tests: test_t4.py. The whole contract was approved before implementation.

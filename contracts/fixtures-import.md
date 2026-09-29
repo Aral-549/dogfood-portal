@@ -22,7 +22,7 @@ what it did. It does not compute scores (scoring) or render anything.
 | 4 | team member emails | one user per distinct email, role participant, member of that team | 91 distinct member emails in upstream file |
 | 5 | judge emails | one user per judge email, role judge, judge_id = fixture id, tracks linked | |
 | 6 | `prj_07` and `prj_41` (same team `tm_07`, same title `Dry Harbour`, same repo_url) | both rows kept; `prj_41` (later `submitted_at`) is canonical; `prj_07.superseded_by = prj_41`; report lists the pair | detection: same team AND (same case-folded title OR same repo_url) |
-| 7 | scores on the duplicate pair | raw review rows stay on their original project; at scoring time (`core/scoring.effective_reviews`) judges who scored both (jdg_19, jdg_21, jdg_26) count once, using their score on the canonical project; judges who scored only `prj_07` (jdg_01, jdg_12) carry over to the canonical project | merged set = 6 reviewers: jdg_19, jdg_21, jdg_26, jdg_01, jdg_12, jdg_18. Needs reviewer sign-off |
+| 7 | scores on the duplicate pair | raw review rows stay on their original project; at scoring time (`core/scoring.effective_reviews`) judges who scored both (jdg_19, jdg_21, jdg_26) count once, using their score on the canonical project; judges who scored only `prj_07` (jdg_01, jdg_12) carry over to the canonical project | merged set = 6 reviewers: jdg_19, jdg_21, jdg_26, jdg_01, jdg_12, jdg_18. Approved. |
 | 8 | gallery after import | shows `prj_41`, hides `prj_07` | |
 | 9 | score with a criterion value outside 1..5, or non-integer | row rejected with reason, import continues | none in upstream file |
 | 10 | score missing a rubric criterion | row rejected with reason, import continues | none in upstream file |
@@ -39,10 +39,7 @@ what it did. It does not compute scores (scoring) or render anything.
 
 ## Explicitly out of scope
 - Bulk import of arbitrary CSV (T4).
-- Judge assignment beyond "a judge who has a score on a project is assigned to it" (assignment contract, next batch).
+- Judge assignment beyond "a judge who has a score on a project is assigned to it" (`lifecycle.md` case 14).
 
 ## Status
-- [x] Drafted
-- [ ] Reviewed by a human
-- [ ] Implementation matches this contract
-- [ ] Golden tests exist for every behavior case above
+Implemented. Tests: test_importer.py. The design decisions in it were approved before implementation; the cases were not reviewed one by one.

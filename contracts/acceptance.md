@@ -61,7 +61,4 @@ pass the check dishonestly. See `authz.md` cases 8-10.
 - Everything the checker does not probe (covered by our own tests).
 
 ## Status
-- [x] Drafted
-- [ ] Reviewed by a human
-- [ ] Implementation matches this contract
-- [ ] Golden tests exist for every behavior case above
+Implemented. Tests: test_acceptance.py, test_checker_e2e.py (runs the real run.py). The design decisions in it were approved before implementation; the cases were not reviewed one by one.

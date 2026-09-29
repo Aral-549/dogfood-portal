@@ -66,7 +66,4 @@ For each close-call project, ordered by `|p_top_k - 0.5|` ascending, then projec
 - Recomputing judge statistics per replicate (documented as a limitation in JUDGING.md).
 
 ## Status
-- [x] Drafted
-- [x] Reviewed by a human (approved 2026-09-27)
-- [ ] Implementation matches this contract
-- [ ] Golden tests exist for every behavior case above
+Implemented. Tests: test_confidence.py. The whole contract was approved before implementation.
