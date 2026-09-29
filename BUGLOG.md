@@ -264,3 +264,10 @@ Entries below come from the 2026-09-27 adversarial pass. Regression cases are in
 - **Stage/module:** HTTP input boundary (`app._check_text`)
 - **Regression case added:** `tests/golden/test_sweep_findings_0929.py` (6 cases, separate verification agent)
 - **Status:** fixed (regression case passes)
+
+## 2026-09-29 -- BUG-37 any save of the Event form failed once a tally had been shown
+- **Symptom:** after a voting window ended and a (possibly empty) tally was shown, saving the organizer Event form to change anything (deadlines, prizes) returned 409 `voting_closed_final`, because the form always re-sends the prefilled voting dates. Reported by the human while preparing the demo.
+- **Root cause:** the lock checked whether the voting fields were present in the request, not whether they changed.
+- **Stage/module:** organizer event update (`app.update_event`)
+- **Regression case added:** pending (separate verification agent)
+- **Status:** fixed, regression case pending

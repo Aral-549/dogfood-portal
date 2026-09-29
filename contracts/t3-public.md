@@ -61,7 +61,7 @@ separate result ("People's choice"). Authorization goes through `core/authz`.
 - Deleting a project's team member does not delete their votes (audit trail).
 - Vote audit rows name voter and project, so the organizer dashboard masks them until voting closes (case 12; BUG-31).
 - Failed-login limits reserve the attempt before the password is checked, so parallel guesses cannot all pass (case 19; BUG-32).
-- Once any tally has been shown (results API, `/vote` after close, dashboard top 10, export with votes), the voting window is final: 409 `voting_closed_final`. Rescheduling a window nobody has seen stays allowed (BUG-33).
+- Once any tally has been shown (results API, `/vote` after close, dashboard top 10, export with votes), the voting window is final: 409 `voting_closed_final`. Rescheduling a window nobody has seen stays allowed (BUG-33). Re-saving the event form with the same voting dates is not a change: other fields (deadlines, prizes) stay editable (BUG-37).
 - Tallies count only projects still on the ballot, and never a vote for the voter's own team, even if they joined it after voting (BUG-34).
 - Comments only on canonical submitted projects; NUL bytes rejected; a comment id outside SQLite's integer range is 404, not 500 (BUG-35).
 

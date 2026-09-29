@@ -1100,11 +1100,16 @@ async def update_event(request: Request):
             changes["votes_per_voter"] = vpv
     except (ValueError, OverflowError) as e:
         return JSONResponse({"error": "invalid", "detail": str(e)}, status_code=422)
-    if ("voting_open" in changes or "voting_close" in changes) and ev["voting_revealed"]:
+    window_moves = any(k in changes and changes[k] != ev[k] for k in ("voting_open", "voting_close"))
+    if window_moves and ev["voting_revealed"]:
         # Tallies have been shown: moving the window now would allow close-early, peek, reopen.
+        # Re-saving the form with the same dates is not a move, so other fields stay editable.
         return JSONResponse({"error": "voting_closed_final",
                              "detail": "vote tallies have been shown; the voting window can no longer change"},
                             status_code=409)
+    for k in ("voting_open", "voting_close"):
+        if k in changes and changes[k] == ev[k]:
+            del changes[k]  # unchanged: nothing to write or audit
     v_open = changes.get("voting_open", ev["voting_open"])
     v_close = changes.get("voting_close", ev["voting_close"])
     if bool(v_open) != bool(v_close) and ("voting_open" in changes or "voting_close" in changes):
