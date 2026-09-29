@@ -1,90 +1,133 @@
 {% extends "base.html" %}
 {% block title %}Organizer{% endblock %}
 {% block content %}
-<h1>Organizer: {{ event.name }}</h1>
-{% if links %}<p class="card">Judge set-password link (pass it on): <code>{{ links }}</code></p>{% endif %}
+{% set done_total = progress|sum(attribute="done") %}{% set assigned_total = progress|sum(attribute="assigned") %}
+<div class="page-head">
+  <h1>{{ event.name }}</h1>
+  <p class="muted">Organizer dashboard &middot; everything here is recomputed on each load and every change is audited.</p>
+</div>
+{% if links %}<p class="note">Judge set-password link, pass it on: <code>{{ links }}</code></p>{% endif %}
 
-<section class="card">
+<div class="stats">
+  <div class="stat"><div class="k">Submissions</div><div class="v">{{ "Open" if now < event.submissions_close else "Closed" }}</div><div class="s">{{ "until" if now < event.submissions_close else "since" }} {{ event.submissions_close }}</div></div>
+  <div class="stat"><div class="k">Judging</div><div class="v">{{ done_total }} / {{ assigned_total }}</div><div class="s">reviews done across {{ progress|length }} judges</div></div>
+  <div class="stat"><div class="k">Community vote</div><div class="v">{{ voting.state|capitalize }}</div><div class="s">{{ voting.total }} vote{{ "" if voting.total == 1 else "s" }} cast</div></div>
+  <div class="stat"><div class="k">Results</div><div class="v">{{ "Published" if event.results_published else "Not published" }}</div><div class="s">{{ results|length }} ranked projects</div></div>
+</div>
+
+<div class="with-index">
+<nav class="index" aria-label="Sections">
+  <p>Setup</p>
+  <a href="#event">Event and dates</a><a href="#rubric">Rubric</a><a href="#judges">Judges</a>
+  <p>Results</p>
+  <a href="#ranking">Ranking</a><a href="#agreement">Judge agreement</a><a href="#integrity">Integrity checks</a><a href="#eligibility">Eligibility</a>
+  <p>Public</p>
+  <a href="#vote">Community vote</a>
+  <p>Tools</p>
+  <a href="#plan">Judging plan</a><a href="#integrations">Certificates and API</a><a href="#audit">Audit log</a>
+</nav>
+<div>
+
+<section class="card" id="event">
   <h2>Event</h2>
   {% if is_checker_event %}
-  <p class="error">This is the default event, which the acceptance checker uses. Its submission deadline is
+  <p class="note">This is the default event, which the acceptance checker uses. Its submission deadline is
     in the past on purpose: moving it into the future makes the checker's "closed event refuses
     submissions" check fail, and with it T1. If you move it for a demo, run <code>docker compose down -v</code>
     afterwards to restore the fixture data.</p>
   {% endif %}
-  <form method="post" action="/organizer/event?event={{ event.id }}" class="row">
-    <label>Submissions close (UTC) <input name="submissions_close" value="{{ event.submissions_close }}"></label>
-    <label>Judging close (UTC) <input name="judging_close" value="{{ event.judging_close or '' }}"></label>
-    <label>Prizes <input name="prizes" value="{{ event.prizes }}"></label>
-    <label>Voting opens (UTC) <input name="voting_open" value="{{ event.voting_open or '' }}"></label>
-    <label>Voting closes (UTC) <input name="voting_close" value="{{ event.voting_close or '' }}"></label>
-    <label>Votes per voter <input name="votes_per_voter" value="{{ event.votes_per_voter }}" size="3"></label>
-    <button>Save</button>
+  <form method="post" action="/organizer/event?event={{ event.id }}">
+    <div class="fields-title">Deadlines (UTC)</div>
+    <div class="fields">
+      <label>Submissions close <input name="submissions_close" value="{{ event.submissions_close }}"></label>
+      <label>Judging close <input name="judging_close" value="{{ event.judging_close or '' }}" placeholder="optional"></label>
+      <label>Prizes <input name="prizes" value="{{ event.prizes }}" placeholder="e.g. Best overall"></label>
+    </div>
+    <div class="fields-title">Community vote (UTC)</div>
+    <div class="fields">
+      <label>Voting opens <input name="voting_open" value="{{ event.voting_open or '' }}" placeholder="2026-10-01T12:00:00Z"></label>
+      <label>Voting closes <input name="voting_close" value="{{ event.voting_close or '' }}" placeholder="2026-10-02T12:00:00Z"></label>
+      <label>Votes per voter <input name="votes_per_voter" value="{{ event.votes_per_voter }}"></label>
+    </div>
+    <div class="actions"><button>Save event</button></div>
   </form>
-  <form method="post" action="/organizer/publish?event={{ event.id }}" class="row">
-    {% if event.results_published %}<input type="hidden" name="unpublish" value="1"><button>Unpublish results</button>
+  <form method="post" action="/organizer/publish?event={{ event.id }}" class="actions">
+    {% if event.results_published %}<input type="hidden" name="unpublish" value="1"><button class="secondary">Unpublish results</button>
     {% else %}<button>Publish results</button>{% endif %}
     <a href="/api/export.csv?event={{ event.id }}">Download results CSV</a>
   </form>
 </section>
 
-<section class="card">
+<section class="card" id="rubric">
   <h2>Rubric weights</h2>
-  <form method="post" action="/organizer/rubric?event={{ event.id }}" class="row">
-    {% for name, w in rubric.items() %}<label>{{ name }} <input name="w_{{ name }}" value="{{ w }}" size="4"></label>{% endfor %}
-    <button>Save weights</button>
+  <p class="muted">Relative weight of each criterion. They are normalized to sum to 1, so 2 / 1 / 1 means half the score is the first criterion.</p>
+  <form method="post" action="/organizer/rubric?event={{ event.id }}">
+    <div class="fields">{% for name, w in rubric.items() %}<label>{{ name|capitalize }} <input name="w_{{ name }}" value="{{ w }}"></label>{% endfor %}</div>
+    <div class="actions"><button>Save weights</button></div>
   </form>
 </section>
 
-<section class="card">
+<section class="card" id="judges">
   <h2>Judges and assignment</h2>
-  <form method="post" action="/organizer/judges?event={{ event.id }}" class="row">
-    <input name="email" type="email" placeholder="judge@example.org" required>
-    <input name="tracks" placeholder="track ids, comma separated">
-    <button>Invite judge</button>
+  <form method="post" action="/organizer/judges?event={{ event.id }}">
+    <div class="fields">
+      <label>Invite a judge <input name="email" type="email" placeholder="judge@example.org" required></label>
+      <label>Tracks <input name="tracks" placeholder="track ids, comma separated"></label>
+    </div>
+    <div class="actions"><button>Invite judge</button></div>
   </form>
   <form method="post" action="/organizer/assign?event={{ event.id }}" class="row">
-    <label>Judges per project <input name="k" value="3" size="2"></label><button>Auto-assign</button>
+    <label>Judges per project <input name="k" value="3" size="2"></label><button class="secondary">Auto-assign</button>
+    <span class="muted">Lowest load first, never a judge on the project's team.</span>
   </form>
+  <details><summary>Progress by judge ({{ done_total }} / {{ assigned_total }} reviews)</summary>
   <div class="table-wrap"><table>
-    <tr><th>Judge</th><th>Email</th><th>Done / assigned</th></tr>
-    {% for j in progress %}<tr><td>{{ j.id }}</td><td>{{ j.email }}</td><td>{{ j.done }} / {{ j.assigned }}{% if j.assigned and j.done < j.assigned %} <span class="flag">unfinished</span>{% endif %}</td></tr>{% endfor %}
-  </table></div>
+    <tr><th>Judge</th><th>Email</th><th class="num">Done / assigned</th></tr>
+    {% for j in progress %}<tr><td>{{ j.id }}</td><td>{{ j.email }}</td><td class="num">{% if j.assigned and j.done < j.assigned %}<span class="flag warn">unfinished</span> {% endif %}{{ j.done }} / {{ j.assigned }}</td></tr>{% endfor %}
+  </table></div></details>
 </section>
 
-<section class="card">
-  <h2>Ranking: raw vs normalized, and how sure it is</h2>
+<section class="card" id="ranking">
+  <h2>Ranking</h2>
+  <p class="muted">Ranked by normalized score (each judge's harshness removed). "Change" is the move against the plain average; P(top {{ k }}) is how often the project stays in the prize places when its reviews are resampled. Advisory only: it never changes the ranking.</p>
   <form method="get" action="/organizer" class="row">
     <input type="hidden" name="event" value="{{ event.id }}">
-    <label>Prize places (k) <input name="k" value="{{ k }}" size="2"></label><button>Recompute</button>
-    {% if confidence %}<span class="muted">P(top {{ k }}) by {{ confidence.method.replace("_", " ") }} over {{ confidence.replicates }} resamples of each project's reviews. Advisory: the ranking itself does not change.</span>{% endif %}
+    <label>Prize places <input name="k" value="{{ k }}" size="2"></label><button class="secondary">Recompute</button>
   </form>
   <form method="post" action="/organizer/tiebreak?event={{ event.id }}" class="row">
-    <input type="hidden" name="k" value="{{ k }}"><button>Assign a tie-breaker judge to each close call</button>
-    <a href="/api/confidence.csv?event={{ event.id }}&k={{ k }}">Download confidence CSV</a>
+    <input type="hidden" name="k" value="{{ k }}"><button class="secondary">Assign a tie-breaker judge to each close call</button>
+    <a href="/api/confidence.csv?event={{ event.id }}&k={{ k }}">Confidence CSV</a>
   </form>
   {% if duplicates %}<p class="muted">Merged duplicates: {% for old, new in duplicates %}{{ old }} into {{ new }}{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+  <input type="checkbox" id="adv" class="adv-box"><label for="adv" class="adv-toggle">Show advanced columns (raw rank, raw mean, z, Shrunk rank, Order rank)</label>
   <div class="table-wrap"><table>
-    <tr><th>Rank</th><th>Raw rank</th><th>Change</th><th>Project</th><th>Reviews</th><th>Raw mean</th><th>z</th><th>P(top {{ k }})</th><th title="Rank if each judge's mean and spread are shrunk toward everyone's (advisory; see JUDGING.md)">Shrunk rank</th><th title="Bradley-Terry rank from each judge's ordering of their projects only; ignores how generous a judge is (advisory)">Order rank</th><th></th></tr>
+    <tr><th class="num">Rank</th><th>Project</th><th class="num">Reviews</th><th class="num">Change</th><th class="num">P(top {{ k }})</th>
+      <th class="num adv">Raw rank</th><th class="num adv">Raw mean</th><th class="num adv">z</th>
+      <th class="num adv" title="Rank if each judge's mean and spread are shrunk toward everyone's (advisory; see JUDGING.md)">Shrunk rank</th>
+      <th class="num adv" title="Bradley-Terry rank from each judge's ordering of their projects only; ignores how generous a judge is (advisory)">Order rank</th><th>Flags</th></tr>
     {% for r in results %}
     {% set delta = r.raw_rank - r.rank %}
-    <tr><td>{{ r.rank }}</td><td>{{ r.raw_rank }}</td>
-      <td class="{{ 'up' if delta > 0 else ('down' if delta < 0 else '') }}">{{ ('+' ~ delta) if delta > 0 else delta }}</td>
-      <td>{{ meta[r.project].title }} <span class="muted">{{ r.project }}</span></td><td>{{ r.n_reviews }}</td>
-      <td>{{ "%.3f"|format(r.raw_mean) if r.raw_mean is not none else "" }}</td>
-      <td>{{ "%.3f"|format(r.z) if r.z is not none else "" }}</td>
-      {% set c = confidence.projects[r.project] if confidence else none %}
-      <td>{{ "%.3f"|format(c.p_top_k) if c and not c.unreviewed else "" }}</td>
-      {% set sr = shrunk.get(r.project) %}
-      {% set x = cross.get(r.project) %}
-      <td>{{ sr if sr else "" }}</td><td>{{ x.ordering_rank if x else "" }}{% if x and x.prize_line_disputed %} <span class="flag" title="In the top {{ k }} by one method and not by {{ x.disagreeing|join(' and ') }}: look at this project before announcing winners">prize line disputed</span>{% endif %}</td>
-      <td>{% if c and c.close_call %}<span class="flag">close call</span> {% endif %}{% if r.low_confidence %}<span class="flag">low confidence</span>{% endif %}</td></tr>
+    {% set c = confidence.projects[r.project] if confidence else none %}
+    {% set sr = shrunk.get(r.project) %}
+    {% set x = cross.get(r.project) %}
+    <tr><td class="num">{{ r.rank }}</td>
+      <td>{{ meta[r.project].title }} <span class="muted">{{ r.project }}</span></td>
+      <td class="num">{{ r.n_reviews }}</td>
+      <td class="num {{ 'up' if delta > 0 else ('down' if delta < 0 else '') }}" title="Raw rank {{ r.raw_rank }}">{{ ('+' ~ delta) if delta > 0 else (delta if delta < 0 else "&middot;"|safe) }}</td>
+      <td class="num">{{ "%.3f"|format(c.p_top_k) if c and not c.unreviewed else "" }}</td>
+      <td class="num adv">{{ r.raw_rank }}</td>
+      <td class="num adv">{{ "%.3f"|format(r.raw_mean) if r.raw_mean is not none else "" }}</td>
+      <td class="num adv">{{ "%.3f"|format(r.z) if r.z is not none else "" }}</td>
+      <td class="num adv">{{ sr if sr else "" }}</td>
+      <td class="num adv">{{ x.ordering_rank if x else "" }}</td>
+      <td>{% if c and c.close_call %}<span class="flag warn">close call</span> {% endif %}{% if x and x.prize_line_disputed %}<span class="flag warn" title="In the top {{ k }} by one method and not by {{ x.disagreeing|join(' and ') }}: look at this project before announcing winners">prize line disputed</span> {% endif %}{% if r.low_confidence %}<span class="flag">low confidence</span>{% endif %}</td></tr>
     {% endfor %}
   </table></div>
+  {% if confidence %}<p class="muted">P(top {{ k }}) by {{ confidence.method.replace("_", " ") }} over {{ confidence.replicates }} resamples.</p>{% endif %}
 </section>
 
-<section class="card">
-  <h2>Judge agreement</h2>
+<details class="card" id="agreement" open>
+  <summary><h2>Judge agreement</h2><span class="muted">{{ agreement|selectattr("status", "equalto", "outlier")|list|length }} outlier(s)</span></summary>
   <p class="muted">Each judge's normalized scores against the other judges on the same projects (leave-one-out).
     Outlier: agreement below -0.3 over 4+ shared projects. Nothing is excluded automatically.</p>
   {% if favoritism %}
@@ -112,20 +155,10 @@
         {% endif %}</td></tr>
     {% endfor %}
   </table></div>
-</section>
+</details>
 
-<section class="card">
-  <h2>Judging plan</h2>
-  <p>{{ plan.projects }} projects &times; {{ plan.reviews_per_project }} reviews = {{ plan.reviews_needed }} reviews needed; {{ plan.reviews_done }} counted so far.
-    {% if plan.judges %}With {{ plan.judges }} judge{{ "" if plan.judges == 1 else "s" }}, each does about {{ plan.per_judge }} ({{ plan.minutes_per_judge }} min at {{ plan.minutes_per_review }} min per project).{% else %}No judges yet.{% endif %}</p>
-  <p class="muted">Judges needed to finish in {% for w, j in plan.judges_needed_for.items() %}{{ w }} min: {{ j }}{% if not loop.last %}; {% endif %}{% endfor %}. (MLH sizing: judges = projects &times; reviews &times; minutes &divide; window; plan for a few to drop out.)</p>
-  {% if under_reviewed %}<p><strong>{{ under_reviewed|length }} project{{ "" if under_reviewed|length == 1 else "s" }} with fewer than 3 counted reviews:</strong>
-    {% for r in under_reviewed[:12] %}{{ meta[r.project].title }} ({{ r.n_reviews }}){% if not loop.last %}, {% endif %}{% endfor %}{% if under_reviewed|length > 12 %}, &hellip;{% endif %}.
-    Run auto-assign to add judges.</p>{% endif %}
-</section>
-
-<section class="card">
-  <h2>Before announcing: integrity checks</h2>
+<details class="card" id="integrity">
+  <summary><h2>Before announcing: integrity checks</h2><span class="muted">{{ integrity|length }} flag(s)</span></summary>
   <p class="muted">Offline checks on submitted projects: the same repository from different teams, near-identical title and summary across teams, no repository to verify. Prize contenders (top {{ k }}) first. These are prompts for a human look, never automatic penalties.</p>
   {% set contenders = integrity|selectattr("prize_contender")|list %}
   {% if contenders %}<p><strong>{{ contenders|length }} flag{{ "" if contenders|length == 1 else "s" }} on prize contenders.</strong></p>{% else %}<p>No flags on the top {{ k }}.</p>{% endif %}
@@ -133,10 +166,10 @@
   <div class="table-wrap"><table><tr><th>Rank</th><th>Project</th><th>Check</th><th>Detail</th></tr>
   {% for f in integrity %}<tr><td>{{ f.rank or "" }}</td><td><a href="/projects/{{ f.project }}">{{ meta[f.project].title if f.project in meta else f.project }}</a> <span class="muted">{{ f.project }}</span></td><td><span class="flag">{{ f.kind.replace("_", " ") }}</span></td><td>{{ f.detail }}</td></tr>{% endfor %}
   </table></div></details>{% endif %}
-</section>
+</details>
 
-<section class="card">
-  <h2>Eligibility</h2>
+<details class="card" id="eligibility">
+  <summary><h2>Eligibility</h2><span class="muted">{{ ineligible|length }} ruled out</span></summary>
   <p class="muted">Rule a project out of prizes (broken rules, pre-written code, a copy). Its reviews still count toward each judge's normalization, so no other project's score changes; the ranking closes up around it. Audited, reversible, and the public results say how many were ruled out.</p>
   {% if ineligible %}<div class="table-wrap"><table><tr><th>Project</th><th>Reason</th><th></th></tr>
   {% for pid, reason in ineligible.items() %}<tr><td><a href="/projects/{{ pid }}">{{ meta[pid].title if pid in meta else pid }}</a> <span class="muted">{{ pid }}</span></td><td>{{ reason }}</td>
@@ -147,17 +180,17 @@
     <input name="reason" placeholder="Reason (required, audited)" required maxlength="1000">
     <button>Rule ineligible</button>
   </form>
-</section>
+</details>
 
-{% if recusals %}<section class="card">
-  <h2>Recusals</h2>
+{% if recusals %}<details class="card" id="recusals">
+  <summary><h2>Recusals</h2><span class="muted">{{ recusals|length }}</span></summary>
   <p class="muted">Judges who declared a conflict of interest. Their assignment was removed and any score they gave no longer counts. Run auto-assign again to fill the gap.</p>
   <div class="table-wrap"><table><tr><th>When</th><th>Judge</th><th>Project</th><th>Reason</th></tr>
   {% for x in recusals %}<tr><td>{{ x.at }}</td><td>{{ x.judge_id }}</td><td>{{ meta[x.project_id].title if x.project_id in meta else x.project_id }}</td><td>{{ x.reason }}</td></tr>{% endfor %}
   </table></div>
-</section>{% endif %}
+</details>{% endif %}
 
-<section class="card">
+<section class="card" id="vote">
   <h2>Community vote</h2>
   <p>Voting is <strong>{{ voting.state }}</strong>. {{ voting.total }} vote{{ "" if voting.total == 1 else "s" }} cast.
     {% if voting.voters %}From {{ voting.voters }} voter{{ "" if voting.voters == 1 else "s" }}.{% endif %}
@@ -178,8 +211,18 @@
   </table></div>
 </section>
 
-<section class="card">
-  <h2>Certificates, records and integrations</h2>
+<details class="card" id="plan">
+  <summary><h2>Judging plan</h2><span class="muted">{{ plan.reviews_done }} of {{ plan.reviews_needed }} reviews</span></summary>
+  <p>{{ plan.projects }} projects &times; {{ plan.reviews_per_project }} reviews = {{ plan.reviews_needed }} reviews needed; {{ plan.reviews_done }} counted so far.
+    {% if plan.judges %}With {{ plan.judges }} judge{{ "" if plan.judges == 1 else "s" }}, each does about {{ plan.per_judge }} ({{ plan.minutes_per_judge }} min at {{ plan.minutes_per_review }} min per project).{% else %}No judges yet.{% endif %}</p>
+  <p class="muted">Judges needed to finish in {% for w, j in plan.judges_needed_for.items() %}{{ w }} min: {{ j }}{% if not loop.last %}; {% endif %}{% endfor %}. (MLH sizing: judges = projects &times; reviews &times; minutes &divide; window; plan for a few to drop out.)</p>
+  {% if under_reviewed %}<p><strong>{{ under_reviewed|length }} project{{ "" if under_reviewed|length == 1 else "s" }} with fewer than 3 counted reviews:</strong>
+    {% for r in under_reviewed[:12] %}{{ meta[r.project].title }} ({{ r.n_reviews }}){% if not loop.last %}, {% endif %}{% endfor %}{% if under_reviewed|length > 12 %}, &hellip;{% endif %}.
+    Run auto-assign to add judges.</p>{% endif %}
+</details>
+
+<details class="card" id="integrations">
+  <summary><h2>Certificates, records and integrations</h2><span class="muted">{{ records_count }} issued</span></summary>
   <form method="post" action="/organizer/records/issue?event={{ event.id }}" class="row">
     <button>Issue signed certificates and judge records</button>
     <span class="muted">{{ records_count }} issued. Needs published results. Idempotent.</span>
@@ -194,13 +237,15 @@
     <input name="events" value="project.submitted,score.submitted,results.published,voting.closed" size="50">
     <button>Add webhook</button>
   </form>
-</section>
+</details>
 
-<section class="card">
-  <h2>Audit log (latest 50)</h2>
+<details class="card" id="audit">
+  <summary><h2>Audit log (latest 50)</h2></summary>
   <div class="table-wrap"><table>
     <tr><th>When</th><th>Who</th><th>Action</th><th>Subject</th><th>Detail</th></tr>
     {% for a in audit %}<tr><td>{{ a.at }}</td><td>{{ a.actor }}</td><td>{{ a.action }}</td><td>{{ a.subject }}</td><td class="muted">{{ a.detail[:200] }}</td></tr>{% endfor %}
   </table></div>
-</section>
+</details>
+
+</div></div>
 {% endblock %}

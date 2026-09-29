@@ -6,7 +6,7 @@
   {% set done = assigned|selectattr("id", "in", mine)|list|length %}{{ done }} of {{ assigned|length }} scored.</p>
 {% for a in assigned %}
 <section class="card">
-  <h3>{{ a.title }} <span class="flag">{{ "scored" if a.id in mine else "to do" }}</span></h3>
+  <h3>{{ a.title }} <span class="flag {{ 'ok' if a.id in mine else 'warn' }}">{{ "scored" if a.id in mine else "to do" }}</span></h3>
   <p>{{ a.summary }}</p>
   <p class="muted"><a href="/projects/{{ a.id }}">Project page</a>{% if a.repo_url %} &middot; <a href="{{ a.repo_url }}" rel="nofollow noopener" target="_blank">Repository</a>{% endif %}</p>
   {% if judging_open %}
