@@ -3,6 +3,7 @@
 {% block content %}
 {% set done_total = progress|sum(attribute="done") %}{% set assigned_total = progress|sum(attribute="assigned") %}
 <div class="page-head">
+  <span class="kicker">Organizer</span>
   <h1>{{ event.name }}</h1>
   <p class="muted">Organizer dashboard &middot; everything here is recomputed on each load and every change is audited.</p>
 </div>

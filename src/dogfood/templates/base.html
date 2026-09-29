@@ -153,11 +153,51 @@ section[id], details[id] { scroll-margin-top:72px; }
   h1 { font-size:1.35rem; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+
+/* ---- type system: self-hosted (offline), SIL Open Font License, see static/fonts/LICENSE-* ---- */
+@font-face { font-family:"Fraunces"; src:url("/static/fonts/fraunces-wght.woff2") format("woff2"); font-weight:300 800; font-display:swap; }
+@font-face { font-family:"Plex Sans"; src:url("/static/fonts/plex-sans-400.woff2") format("woff2"); font-weight:400; font-display:swap; }
+@font-face { font-family:"Plex Sans"; src:url("/static/fonts/plex-sans-400-italic.woff2") format("woff2"); font-weight:400; font-style:italic; font-display:swap; }
+@font-face { font-family:"Plex Sans"; src:url("/static/fonts/plex-sans-500.woff2") format("woff2"); font-weight:500; font-display:swap; }
+@font-face { font-family:"Plex Sans"; src:url("/static/fonts/plex-sans-600.woff2") format("woff2"); font-weight:600 700; font-display:swap; }
+@font-face { font-family:"Plex Mono"; src:url("/static/fonts/plex-mono-400.woff2") format("woff2"); font-weight:400; font-display:swap; }
+@font-face { font-family:"Plex Mono"; src:url("/static/fonts/plex-mono-500.woff2") format("woff2"); font-weight:500 700; font-display:swap; }
+:root { --serif:"Fraunces", Georgia, serif; --sans:"Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --mono:"Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+body { font-family:var(--sans); font-size:15px; letter-spacing:0; }
+h1, h2, .stat .v { font-family:var(--serif); font-optical-sizing:auto; }
+h1 { font-size:2.05rem; font-weight:560; letter-spacing:-.022em; line-height:1.1; }
+h2 { font-size:1.22rem; font-weight:580; letter-spacing:-.012em; }
+h3 { font-family:var(--sans); font-weight:600; }
+.grid .card h3 { font-family:var(--serif); font-size:1.12rem; font-weight:560; letter-spacing:-.01em; }
+.stat .v { font-size:1.45rem; font-weight:520; letter-spacing:-.015em; margin-top:.2rem; }
+
+/* small labels speak in mono: section kickers, table heads, stat keys, the index */
+.stat .k, .fields-title, .index p, th, .flag, .kicker { font-family:var(--mono); font-weight:500; }
+th { font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; }
+.flag { font-size:.7rem; letter-spacing:.02em; }
+code { font-family:var(--mono); }
+
+/* identifiers, numbers and timestamps: mono, so columns line up and ids read as ids */
+td.num, table td .muted, .muted code { font-family:var(--mono); }
+table td .muted { font-size:.8em; }
+td.num { font-size:.86rem; }
+
+/* wordmark */
+.brand { font-family:var(--mono); font-weight:500; letter-spacing:.14em; font-size:.82rem; gap:.6rem; }
+.brand::before { width:auto; height:auto; border-radius:0; background:none; content:"[ ]"; color:var(--accent); letter-spacing:0; }
+.brand small { font-family:var(--sans); letter-spacing:0; font-weight:400; color:var(--faint); font-size:.82rem; }
+
+/* page head: a quiet mono kicker above the serif title */
+.kicker { display:block; font-size:.72rem; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); margin-bottom:.35rem; }
+.page-head { padding-bottom:1rem; border-bottom:1px solid var(--line); margin-bottom:1.5rem; }
+main > h1:first-child { margin-bottom:.6rem; }
 </style>
 </head>
 <body>
 <header class="site"><div class="site-inner">
-  <a class="brand" href="/projects">DOGFOOD</a>
+  <a class="brand" href="/projects">DOGFOOD <small>hackathon portal</small></a>
   {% set here = request.url.path %}
   <nav aria-label="Main">
     <a href="/projects"{% if here == "/projects" or here.startswith("/projects/") %} aria-current="page"{% endif %}>Gallery</a>

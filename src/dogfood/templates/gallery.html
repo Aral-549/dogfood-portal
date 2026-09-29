@@ -1,8 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Gallery{% endblock %}
 {% block content %}
-<h1>{{ event.name }}</h1>
-<p class="muted">Submissions close {{ event.submissions_close }}. {{ total }} project{{ "" if total == 1 else "s" }}.</p>
+<div class="page-head">
+  <span class="kicker">Project gallery</span>
+  <h1>{{ event.name }}</h1>
+  <p class="muted">Submissions close {{ event.submissions_close }}. {{ total }} project{{ "" if total == 1 else "s" }}.</p>
+</div>
 <form class="row" method="get" action="/projects">
   <input name="q" value="{{ q }}" placeholder="Search title or summary" aria-label="Search">
   <select name="track" aria-label="Track">

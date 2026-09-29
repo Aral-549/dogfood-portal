@@ -1,9 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Judging{% endblock %}
 {% block content %}
-<h1>Your assigned projects</h1>
-<p class="muted">You see only your own scores. {{ "Judging is open." if judging_open else "Judging is closed." }}
-  {% set done = assigned|selectattr("id", "in", mine)|list|length %}{{ done }} of {{ assigned|length }} scored.</p>
+<div class="page-head">
+  <span class="kicker">Judging</span>
+  <h1>Your assigned projects</h1>
+  <p class="muted">You see only your own scores. {{ "Judging is open." if judging_open else "Judging is closed." }}
+    {% set done = assigned|selectattr("id", "in", mine)|list|length %}{{ done }} of {{ assigned|length }} scored.</p>
+</div>
 {% for a in assigned %}
 <section class="card">
   <h3>{{ a.title }} <span class="flag {{ 'ok' if a.id in mine else 'warn' }}">{{ "scored" if a.id in mine else "to do" }}</span></h3>

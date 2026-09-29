@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import boot, db, logs, services as svc
@@ -66,6 +67,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="DOGFOOD portal", lifespan=lifespan, docs_url=None, redoc_url=None)
+# Self-hosted fonts and other static assets: the portal must work with the network off.
+app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 
 MAX_BODY = 1 << 20            # 1 MiB for every form and JSON body ...
 MAX_IMPORT_BODY = 32 << 20    # ... except a whole event being imported
