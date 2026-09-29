@@ -7,6 +7,16 @@ REST API. One command starts it on a laptop with the network off.
 
 Built for [DOGFOOD 2026](https://dogfoodhack.com). MIT licensed.
 
+## Try it live
+
+**https://portal-production-7ade.up.railway.app**
+
+Log in with any demo account from the table under [Run it](#run-it) (password `dogfood-demo`),
+for example `organizer@dogfood.local` for the organizer dashboard or `diego.herrera@example.org`
+for the judge view. The demo is shared by everyone who opens it and has no persistent storage,
+so it goes back to the fixture data whenever it restarts. It is there to click around in; the
+supported way to run the portal is `docker compose up`, below.
+
 ## Where it stands
 
 The official checker, run against a fresh `docker compose up`, prints:
